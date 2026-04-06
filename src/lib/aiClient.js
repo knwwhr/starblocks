@@ -6,7 +6,7 @@ export async function sendMessage(messages, options = {}) {
     throw new Error('VITE_GEMINI_API_KEY가 설정되지 않았습니다.')
   }
 
-  const model = options.model || 'gemini-2.0-flash-lite'
+  const model = options.model || 'gemini-flash-latest'
   const systemMessage = messages.find(m => m.role === 'system')
   const chatMessages = messages.filter(m => m.role !== 'system')
 
@@ -16,9 +16,12 @@ export async function sendMessage(messages, options = {}) {
     parts: [{ text: m.content }]
   }))
 
-  const response = await fetch(`${GEMINI_API_URL}/${model}:generateContent?key=${apiKey}`, {
+  const response = await fetch(`${GEMINI_API_URL}/${model}:generateContent`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-goog-api-key': apiKey,
+    },
     body: JSON.stringify({
       system_instruction: systemMessage ? { parts: [{ text: systemMessage.content }] } : undefined,
       contents,
