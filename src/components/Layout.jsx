@@ -15,7 +15,7 @@ export default function Layout({ children }) {
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
         <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
           <Link to="/" className="text-lg font-bold text-slate-900 no-underline">
-            Experience Block Builder
+            Starblocks
           </Link>
           <nav className="flex items-center gap-3">
             {user ? (

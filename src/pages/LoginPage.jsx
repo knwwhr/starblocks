@@ -96,7 +96,7 @@ export default function LoginPage() {
             onClick={() => { setIsSignUp(!isSignUp); setError('') }}
             className="ml-1 text-primary-600 hover:text-primary-700 font-medium"
           >
-            {isSignUp ? '로그인' : '회원가��'}
+            {isSignUp ? '로그인' : '회원가입'}
           </button>
         </p>
       </div>
