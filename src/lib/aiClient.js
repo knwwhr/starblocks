@@ -1,28 +1,31 @@
-const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages'
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 export async function sendMessage(messages, options = {}) {
-  const apiKey = import.meta.env.VITE_CLAUDE_API_KEY
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY
   if (!apiKey) {
-    throw new Error('VITE_CLAUDE_API_KEY가 설정되지 않았습니다.')
+    throw new Error('VITE_GEMINI_API_KEY가 설정되지 않았습니다.')
   }
 
-  const model = options.model || 'claude-haiku-4-5-20251001'
+  const model = options.model || 'gemini-2.0-flash'
   const systemMessage = messages.find(m => m.role === 'system')
   const chatMessages = messages.filter(m => m.role !== 'system')
 
-  const response = await fetch(CLAUDE_API_URL, {
+  // Gemini 형식으로 변환
+  const contents = chatMessages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }]
+  }))
+
+  const response = await fetch(`${GEMINI_API_URL}/${model}:generateContent?key=${apiKey}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model,
-      max_tokens: 1024,
-      system: systemMessage?.content || '',
-      messages: chatMessages,
+      system_instruction: systemMessage ? { parts: [{ text: systemMessage.content }] } : undefined,
+      contents,
+      generationConfig: {
+        maxOutputTokens: 1024,
+        temperature: 0.8,
+      },
     }),
   })
 
@@ -32,5 +35,5 @@ export async function sendMessage(messages, options = {}) {
   }
 
   const data = await response.json()
-  return data.content[0].text
+  return data.candidates[0].content.parts[0].text
 }
