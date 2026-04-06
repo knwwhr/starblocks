@@ -6,7 +6,7 @@ export async function sendMessage(messages, options = {}) {
     throw new Error('VITE_GEMINI_API_KEY가 설정되지 않았습니다.')
   }
 
-  const model = options.model || 'gemini-2.0-flash'
+  const model = options.model || 'gemini-1.5-flash'
   const systemMessage = messages.find(m => m.role === 'system')
   const chatMessages = messages.filter(m => m.role !== 'system')
 
