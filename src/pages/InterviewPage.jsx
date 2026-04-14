@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { CATEGORIES } from '../config/categories'
-import { createInterviewSession, buildApiMessages, parseBlockFromResponse, getDisplayText } from '../lib/interviewEngine'
+import { createInterviewSession, buildApiMessages, parseBlockFromResponse, getDisplayText, MAX_TURNS } from '../lib/interviewEngine'
 import { sendMessage } from '../lib/aiClient'
 import { supabase } from '../config/supabase'
 import BlockPreview from '../components/BlockPreview'
@@ -91,12 +91,35 @@ function ChatInterface({ session, onComplete }) {
       const apiMessages = buildApiMessages(currentSession, text)
       const response = await sendMessage(apiMessages)
 
-      const block = parseBlockFromResponse(response)
+      let block = parseBlockFromResponse(response)
       const displayText = getDisplayText(response)
 
       const aiMsg = { role: 'assistant', content: response, displayContent: displayText }
-      setMessages(prev => [...prev, aiMsg])
-      setTurnCount(prev => prev + 1)
+      const updatedMessages = [...newMessages, aiMsg]
+      setMessages(updatedMessages)
+      const newTurnCount = turnCount + 1
+      setTurnCount(newTurnCount)
+
+      // 마지막 턴인데 블록이 안 나왔으면 강제 재요청
+      if (!block && newTurnCount >= MAX_TURNS) {
+        const retrySession = {
+          ...session,
+          messages: updatedMessages.map(m => ({ role: m.role, content: m.content })),
+          turnCount: newTurnCount,
+        }
+        const retryMessages = buildApiMessages(retrySession, '지금까지 내용으로 블록을 만들어주세요.')
+        const retryResponse = await sendMessage(retryMessages)
+        block = parseBlockFromResponse(retryResponse)
+
+        if (block) {
+          const retryDisplay = getDisplayText(retryResponse)
+          setMessages(prev => [
+            ...prev,
+            { role: 'user', content: '지금까지 내용으로 블록을 만들어주세요.', displayContent: '지금까지 내용으로 블록을 만들어주세요.' },
+            { role: 'assistant', content: retryResponse, displayContent: retryDisplay },
+          ])
+        }
+      }
 
       if (block) {
         setGeneratedBlock(block)
@@ -144,7 +167,7 @@ function ChatInterface({ session, onComplete }) {
               {CATEGORIES.find(c => c.id === session.category)?.label}
             </p>
           </div>
-          <div className="text-xs text-slate-400">{turnCount}턴</div>
+          <div className="text-xs text-slate-400">{turnCount}/{MAX_TURNS}턴</div>
         </div>
       </div>
 
@@ -244,7 +267,7 @@ export default function InterviewPage() {
           completed_at: new Date().toISOString(),
         })
 
-      navigate('/dashboard')
+      navigate('/block-result', { state: { block: { ...savedBlock, category } } })
     } catch (err) {
       console.error('Save error:', err)
       alert('저장 중 오류가 발생했습니다. 다시 시도해주세요.')

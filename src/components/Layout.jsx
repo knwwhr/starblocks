@@ -27,6 +27,12 @@ export default function Layout({ children }) {
                   내 블록
                 </Link>
                 <Link
+                  to="/cover-letter"
+                  className="text-sm text-slate-600 hover:text-slate-900 no-underline"
+                >
+                  자소서 쓰기
+                </Link>
+                <Link
                   to="/interview"
                   className="text-sm bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700 no-underline"
                 >

@@ -5,6 +5,8 @@ import LandingPage from './pages/LandingPage'
 import LoginPage from './pages/LoginPage'
 import InterviewPage from './pages/InterviewPage'
 import DashboardPage from './pages/DashboardPage'
+import BlockResultPage from './pages/BlockResultPage'
+import CoverLetterPage from './pages/CoverLetterPage'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -34,6 +36,22 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <DashboardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/block-result"
+          element={
+            <ProtectedRoute>
+              <BlockResultPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/cover-letter"
+          element={
+            <ProtectedRoute>
+              <CoverLetterPage />
             </ProtectedRoute>
           }
         />

@@ -169,12 +169,20 @@ export default function DashboardPage() {
           <h1 className="text-xl font-bold text-slate-900">내 경험 블록</h1>
           <p className="text-sm text-slate-500">{blocks.length}개의 블록</p>
         </div>
-        <Link
-          to="/interview"
-          className="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 no-underline"
-        >
-          + 새 블록 만들기
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/cover-letter"
+            className="text-primary-600 border border-primary-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-50 no-underline"
+          >
+            자소서 쓰기
+          </Link>
+          <Link
+            to="/interview"
+            className="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 no-underline"
+          >
+            + 새 블록 만들기
+          </Link>
+        </div>
       </div>
 
       {blocks.length === 0 ? (
