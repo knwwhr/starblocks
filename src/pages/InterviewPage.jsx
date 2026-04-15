@@ -5,6 +5,7 @@ import { CATEGORIES } from '../config/categories'
 import { createInterviewSession, buildApiMessages, parseBlockFromResponse, getDisplayText, buildBlockGenerationMessages, MAX_TURNS } from '../lib/interviewEngine'
 import { sendMessage } from '../lib/aiClient'
 import { supabase } from '../config/supabase'
+import { recommendIndustries } from '../lib/coverLetterEngine'
 import BlockPreview from '../components/BlockPreview'
 
 function CategorySelector({ onSelect }) {
@@ -281,6 +282,14 @@ export default function InterviewPage() {
     }
 
     try {
+      // 업종 추천 병렬 호출 (실패해도 블록 저장은 진행)
+      let recommendation = null
+      try {
+        recommendation = await recommendIndustries({ ...block, category })
+      } catch (e) {
+        console.warn('Recommendation failed, saving without it:', e)
+      }
+
       // Save block
       const { data: savedBlock, error: blockError } = await supabase
         .from('experience_blocks')
@@ -296,6 +305,7 @@ export default function InterviewPage() {
           recommended_questions: block.recommended_questions || [],
           strength_score: block.strength_score || 3,
           ai_insight: block.ai_insight,
+          recommended_industries: recommendation || {},
         })
         .select()
         .single()

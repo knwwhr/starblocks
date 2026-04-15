@@ -2,7 +2,55 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../config/supabase'
-import { CATEGORIES, COMPETENCY_TAGS } from '../config/categories'
+import { CATEGORIES, COMPETENCY_TAGS, mapTagToCompetency } from '../config/categories'
+
+function InterviewTranscript({ blockId }) {
+  const [messages, setMessages] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [show, setShow] = useState(false)
+
+  useEffect(() => {
+    supabase
+      .from('interview_sessions')
+      .select('messages')
+      .eq('block_id', blockId)
+      .single()
+      .then(({ data }) => {
+        setMessages(data?.messages || [])
+        setLoading(false)
+      })
+  }, [blockId])
+
+  if (loading) return <div className="text-xs text-slate-400">대화 불러오는 중...</div>
+  if (!messages || messages.length === 0) return null
+
+  return (
+    <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+      <button
+        onClick={(e) => { e.stopPropagation(); setShow(!show) }}
+        className="text-xs font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1 w-full justify-between"
+      >
+        <span>💬 인터뷰 대화 보기 ({messages.length}개 메시지)</span>
+        <span className="text-slate-400">{show ? '접기' : '펼치기'}</span>
+      </button>
+      {show && (
+        <div className="mt-3 space-y-2 max-h-96 overflow-y-auto">
+          {messages.map((m, i) => (
+            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] text-xs px-3 py-2 rounded-lg whitespace-pre-wrap ${
+                m.role === 'user'
+                  ? 'bg-primary-100 text-primary-900'
+                  : 'bg-white border border-slate-200 text-slate-700'
+              }`}>
+                {m.content?.replace(/<block_json>[\s\S]*?<\/block_json>/g, '').trim() || m.content}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function BlockCard({ block, onDelete }) {
   const [expanded, setExpanded] = useState(false)
@@ -66,6 +114,8 @@ function BlockCard({ block, onDelete }) {
             </div>
           )}
 
+          <InterviewTranscript blockId={block.id} />
+
           <div className="flex justify-end pt-2">
             <button
               onClick={(e) => { e.stopPropagation(); onDelete(block.id) }}
@@ -80,18 +130,91 @@ function BlockCard({ block, onDelete }) {
   )
 }
 
+function IndustryRecommendations({ blocks }) {
+  // 모든 블록의 추천 업종/직무를 집계 (빈도순)
+  const industryMap = new Map() // name → { count, reasons: Set }
+  const roleMap = new Map()
+
+  blocks.forEach(block => {
+    const rec = block.recommended_industries
+    if (!rec || typeof rec !== 'object') return
+
+    ;(rec.industries || []).forEach(ind => {
+      if (!ind?.name) return
+      const existing = industryMap.get(ind.name) || { count: 0, reasons: new Set() }
+      existing.count++
+      if (ind.reason) existing.reasons.add(ind.reason)
+      industryMap.set(ind.name, existing)
+    })
+
+    ;(rec.roles || []).forEach(role => {
+      roleMap.set(role, (roleMap.get(role) || 0) + 1)
+    })
+  })
+
+  const topIndustries = [...industryMap.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 5)
+  const topRoles = [...roleMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+
+  if (topIndustries.length === 0 && topRoles.length === 0) return null
+
+  return (
+    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100 p-5 mb-6">
+      <h3 className="text-sm font-bold text-slate-900 mb-1">✨ 내 경험이 통하는 곳</h3>
+      <p className="text-xs text-slate-500 mb-4">지금까지 만든 블록을 종합해 추천한 업종과 직무예요</p>
+
+      {topIndustries.length > 0 && (
+        <div className="mb-3">
+          <div className="text-xs font-bold text-slate-500 mb-2">추천 업종</div>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {topIndustries.map(([name, data]) => (
+              <div key={name} className="bg-white border border-blue-100 rounded-lg px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-blue-800">{name}</span>
+                  {data.count > 1 && (
+                    <span className="text-xs text-blue-400">×{data.count}</span>
+                  )}
+                </div>
+                {[...data.reasons][0] && (
+                  <div className="text-xs text-blue-600 mt-0.5 line-clamp-1">{[...data.reasons][0]}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {topRoles.length > 0 && (
+        <div>
+          <div className="text-xs font-bold text-slate-500 mb-2">추천 직무</div>
+          <div className="flex flex-wrap gap-1.5">
+            {topRoles.map(([role, count]) => (
+              <span key={role} className="text-xs bg-white border border-blue-100 text-blue-700 px-2.5 py-1 rounded-full">
+                {role} {count > 1 && <span className="text-blue-400">×{count}</span>}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CompetencyCoverage({ blocks }) {
   const tagCounts = {}
   COMPETENCY_TAGS.forEach(t => { tagCounts[t.label] = 0 })
 
   blocks.forEach(block => {
-    (block.tags || []).forEach(tag => {
-      const clean = tag.replace('#', '')
-      const match = COMPETENCY_TAGS.find(t =>
-        t.label === clean || t.id === clean ||
-        clean.includes(t.label) || t.label.includes(clean)
-      )
-      if (match) tagCounts[match.label]++
+    const seenInBlock = new Set()
+    ;(block.tags || []).forEach(tag => {
+      const match = mapTagToCompetency(tag)
+      if (match && !seenInBlock.has(match.id)) {
+        tagCounts[match.label]++
+        seenInBlock.add(match.id)
+      }
     })
   })
 
@@ -198,6 +321,8 @@ export default function DashboardPage() {
           </Link>
         </div>
       ) : (
+        <>
+          <IndustryRecommendations blocks={blocks} />
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-3">
             {blocks.map(block => (
@@ -208,6 +333,7 @@ export default function DashboardPage() {
             <CompetencyCoverage blocks={blocks} />
           </div>
         </div>
+        </>
       )}
     </div>
   )

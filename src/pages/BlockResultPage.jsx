@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../config/supabase'
-import { CATEGORIES, COMPETENCY_TAGS } from '../config/categories'
-import { recommendIndustries } from '../lib/coverLetterEngine'
+import { CATEGORIES, COMPETENCY_TAGS, mapTagToCompetency } from '../config/categories'
 
 export default function BlockResultPage() {
   const location = useLocation()
@@ -12,8 +11,12 @@ export default function BlockResultPage() {
   const savedBlock = location.state?.block
 
   const [allBlocks, setAllBlocks] = useState([])
-  const [recommendation, setRecommendation] = useState(null)
-  const [loadingRec, setLoadingRec] = useState(true)
+
+  // DB에 캐싱된 추천 사용
+  const recommendation = savedBlock?.recommended_industries && Object.keys(savedBlock.recommended_industries).length > 0
+    ? savedBlock.recommended_industries
+    : null
+  const loadingRec = false
 
   useEffect(() => {
     if (!savedBlock) {
@@ -21,7 +24,6 @@ export default function BlockResultPage() {
       return
     }
     loadBlocks()
-    loadRecommendation()
   }, [])
 
   const loadBlocks = async () => {
@@ -30,17 +32,6 @@ export default function BlockResultPage() {
       .select('*')
       .eq('user_id', user.id)
     setAllBlocks(data || [])
-  }
-
-  const loadRecommendation = async () => {
-    try {
-      const rec = await recommendIndustries(savedBlock)
-      setRecommendation(rec)
-    } catch {
-      setRecommendation(null)
-    } finally {
-      setLoadingRec(false)
-    }
   }
 
   if (!savedBlock) return null
@@ -53,11 +44,7 @@ export default function BlockResultPage() {
   const coveredTags = new Set()
   allBlocks.forEach(block => {
     (block.tags || []).forEach(tag => {
-      const clean = tag.replace('#', '')
-      const match = COMPETENCY_TAGS.find(t =>
-        t.label === clean || t.id === clean ||
-        clean.includes(t.label) || t.label.includes(clean)
-      )
+      const match = mapTagToCompetency(tag)
       if (match) coveredTags.add(match.id)
     })
   })
