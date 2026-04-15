@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../config/supabase'
 import { CATEGORIES } from '../config/categories'
-import { parseJobPosting, matchBlocksToQuestions, generateAnswer } from '../lib/coverLetterEngine'
+import { parseJobPosting, matchBlocksToQuestions, generateAnswer, DEFAULT_QUESTIONS } from '../lib/coverLetterEngine'
 
-function JobPostingInput({ onAnalyze, loading }) {
+function JobPostingInput({ onAnalyze, loading, error }) {
   const [rawText, setRawText] = useState('')
 
   return (
@@ -29,6 +29,12 @@ function JobPostingInput({ onAnalyze, loading }) {
         />
       </div>
 
+      {error && (
+        <div className="mb-3 bg-red-50 border border-red-100 rounded-lg p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
       <button
         onClick={() => onAnalyze(rawText)}
         disabled={!rawText.trim() || loading}
@@ -43,6 +49,116 @@ function JobPostingInput({ onAnalyze, loading }) {
           'AI가 분석하기'
         )}
       </button>
+    </div>
+  )
+}
+
+function ManualQuestionsInput({ jobInfo, onUseDefault, onUseCustom, onBack, loading }) {
+  const [customQs, setCustomQs] = useState([{ text: '', charLimit: 500 }])
+
+  const addQ = () => setCustomQs([...customQs, { text: '', charLimit: 500 }])
+  const updateQ = (i, field, value) => {
+    const updated = [...customQs]
+    updated[i] = { ...updated[i], [field]: field === 'charLimit' ? (parseInt(value) || null) : value }
+    setCustomQs(updated)
+  }
+  const removeQ = (i) => setCustomQs(customQs.filter((_, idx) => idx !== i))
+
+  const validCustom = customQs.filter(q => q.text.trim())
+
+  return (
+    <div className="max-w-2xl mx-auto px-4 py-8 animate-fade-in">
+      <button onClick={onBack} className="text-xs text-slate-400 hover:text-slate-600 mb-3 block">&larr; 다시 입력</button>
+
+      <div className="mb-6">
+        <h1 className="text-xl font-bold text-slate-900 mb-1">
+          {jobInfo?.company || '공고'} 분석 완료
+        </h1>
+        <p className="text-sm text-slate-500">
+          이 공고에는 자소서 문항이 명시되어 있지 않아요. 어떻게 할까요?
+        </p>
+      </div>
+
+      {jobInfo?.keywords?.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-4 mb-6">
+          <div className="text-xs font-bold text-slate-500 mb-2">공고에서 추출한 핵심 키워드</div>
+          <div className="flex flex-wrap gap-1.5">
+            {jobInfo.keywords.map((kw, i) => (
+              <span key={i} className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">{kw}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Option 1: 기본 문항 */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 mb-4">
+        <h3 className="text-sm font-bold text-slate-900 mb-2">옵션 1. 일반적인 자소서 문항 사용</h3>
+        <p className="text-xs text-slate-500 mb-3">대부분의 기업에서 공통으로 쓰는 4가지 문항으로 자소서를 만들어드려요.</p>
+        <ul className="text-xs text-slate-600 space-y-1 mb-4 bg-slate-50 rounded-lg p-3">
+          {DEFAULT_QUESTIONS.map((q, i) => (
+            <li key={i}>• {q.text} ({q.charLimit}자)</li>
+          ))}
+        </ul>
+        <button
+          onClick={onUseDefault}
+          disabled={loading}
+          className="w-full py-2.5 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-40"
+        >
+          {loading ? '블록 매칭 중...' : '이 문항으로 진행하기'}
+        </button>
+      </div>
+
+      {/* Option 2: 직접 입력 */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <h3 className="text-sm font-bold text-slate-900 mb-2">옵션 2. 문항 직접 입력</h3>
+        <p className="text-xs text-slate-500 mb-3">채용 페이지에 있는 자소서 문항을 직접 입력하세요.</p>
+
+        <div className="space-y-3 mb-3">
+          {customQs.map((q, i) => (
+            <div key={i} className="border border-slate-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-slate-500">문항 {i + 1}</span>
+                {customQs.length > 1 && (
+                  <button onClick={() => removeQ(i)} className="text-xs text-red-400 hover:text-red-600">삭제</button>
+                )}
+              </div>
+              <textarea
+                value={q.text}
+                onChange={(e) => updateQ(i, 'text', e.target.value)}
+                placeholder="예: 팀워크를 발휘한 경험을 서술하시오"
+                rows={2}
+                className="w-full text-sm border border-slate-200 rounded px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-primary-500 mb-2"
+              />
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400">글자수 제한</span>
+                <input
+                  type="number"
+                  value={q.charLimit || ''}
+                  onChange={(e) => updateQ(i, 'charLimit', e.target.value)}
+                  placeholder="500"
+                  className="w-20 text-xs border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
+                <span className="text-xs text-slate-400">자</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={addQ}
+          className="w-full py-2 text-xs text-slate-500 border border-dashed border-slate-300 rounded-lg hover:bg-slate-50 mb-3"
+        >
+          + 문항 추가
+        </button>
+
+        <button
+          onClick={() => onUseCustom(validCustom)}
+          disabled={validCustom.length === 0 || loading}
+          className="w-full py-2.5 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 disabled:opacity-40"
+        >
+          {loading ? '블록 매칭 중...' : `${validCustom.length}개 문항으로 진행하기`}
+        </button>
+      </div>
     </div>
   )
 }
@@ -320,6 +436,8 @@ export default function CoverLetterPage() {
   const [jobInfo, setJobInfo] = useState(null)
   const [questions, setQuestions] = useState([])
   const [matchResult, setMatchResult] = useState(null)
+  const [analyzeError, setAnalyzeError] = useState(null)
+  const [needsManualQuestions, setNeedsManualQuestions] = useState(false)
 
   useEffect(() => {
     if (user) loadBlocks()
@@ -334,31 +452,67 @@ export default function CoverLetterPage() {
     setBlocks(data || [])
   }
 
+  const runMatching = async (jobData, questionList) => {
+    if (blocks.length > 0 && questionList.length > 0) {
+      try {
+        const matches = await matchBlocksToQuestions(questionList, blocks, jobData.requirements)
+        setMatchResult(matches)
+      } catch (err) {
+        console.error('Match error:', err)
+        setMatchResult({ matches: [], overallFit: 0, missingAreas: ['매칭 실패 — 블록을 수동 선택해주세요'] })
+      }
+    } else {
+      setMatchResult({
+        matches: [],
+        overallFit: 0,
+        missingAreas: blocks.length === 0 ? ['경험 블록을 먼저 만들어주세요'] : ['문항을 추가해주세요'],
+      })
+    }
+  }
+
   const handleAnalyze = async (rawText) => {
     if (!rawText.trim()) return
     setAnalyzing(true)
+    setAnalyzeError(null)
+    setNeedsManualQuestions(false)
 
     try {
-      // 1. 공고 파싱
       const parsed = await parseJobPosting(rawText)
       setJobInfo(parsed)
-      setQuestions(parsed.questions || [])
 
-      // 2. 블록이 있으면 매칭
-      if (blocks.length > 0 && parsed.questions?.length > 0) {
-        const matches = await matchBlocksToQuestions(parsed.questions, blocks, parsed.requirements)
-        setMatchResult(matches)
+      if (!parsed.questions || parsed.questions.length === 0) {
+        // 공고에 자소서 문항이 없으면 수동 단계로 진입
+        setQuestions([])
+        setNeedsManualQuestions(true)
+        setPhase('manual')
       } else {
-        setMatchResult({ matches: [], overallFit: 0, missingAreas: ['경험 블록을 먼저 만들어주세요'] })
+        setQuestions(parsed.questions)
+        await runMatching(parsed, parsed.questions)
+        setPhase('result')
       }
-
-      setPhase('result')
     } catch (err) {
       console.error('Analyze error:', err)
-      alert('공고 분석에 실패했습니다. 다시 시도해주세요.')
+      setAnalyzeError(err.message || '공고 분석에 실패했습니다.')
     } finally {
       setAnalyzing(false)
     }
+  }
+
+  const handleUseDefaultQuestions = async () => {
+    const qs = DEFAULT_QUESTIONS
+    setQuestions(qs)
+    setAnalyzing(true)
+    await runMatching(jobInfo, qs)
+    setAnalyzing(false)
+    setPhase('result')
+  }
+
+  const handleUseCustomQuestions = async (customQs) => {
+    setQuestions(customQs)
+    setAnalyzing(true)
+    await runMatching(jobInfo, customQs)
+    setAnalyzing(false)
+    setPhase('result')
   }
 
   const handleReset = () => {
@@ -366,10 +520,24 @@ export default function CoverLetterPage() {
     setJobInfo(null)
     setQuestions([])
     setMatchResult(null)
+    setAnalyzeError(null)
+    setNeedsManualQuestions(false)
   }
 
   if (phase === 'input') {
-    return <JobPostingInput onAnalyze={handleAnalyze} loading={analyzing} />
+    return <JobPostingInput onAnalyze={handleAnalyze} loading={analyzing} error={analyzeError} />
+  }
+
+  if (phase === 'manual') {
+    return (
+      <ManualQuestionsInput
+        jobInfo={jobInfo}
+        onUseDefault={handleUseDefaultQuestions}
+        onUseCustom={handleUseCustomQuestions}
+        onBack={handleReset}
+        loading={analyzing}
+      />
+    )
   }
 
   return (

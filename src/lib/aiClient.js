@@ -26,8 +26,8 @@ export async function sendMessage(messages, options = {}) {
       system_instruction: systemMessage ? { parts: [{ text: systemMessage.content }] } : undefined,
       contents,
       generationConfig: {
-        maxOutputTokens: 1024,
-        temperature: 0.8,
+        maxOutputTokens: options.maxOutputTokens || 2048,
+        temperature: options.temperature ?? 0.8,
       },
     }),
   })

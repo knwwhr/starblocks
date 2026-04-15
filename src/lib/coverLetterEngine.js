@@ -3,7 +3,7 @@ import { sendMessage } from './aiClient'
 const PARSE_JOB_POSTING_PROMPT = `당신은 채용 공고 분석 전문가입니다.
 사용자가 붙여넣은 텍스트에서 다음 정보를 추출하세요.
 
-반드시 아래 JSON 형식으로만 응답하세요. JSON 외의 텍스트는 포함하지 마세요.
+반드시 아래 JSON 형식으로만 응답하세요. JSON 외의 텍스트, 설명, 머리말, 마크다운 펜스 금지.
 
 {
   "company": "회사명 (못 찾으면 빈 문자열)",
@@ -11,12 +11,18 @@ const PARSE_JOB_POSTING_PROMPT = `당신은 채용 공고 분석 전문가입니
   "questions": [
     {
       "text": "자소서 문항 전체 텍스트",
-      "charLimit": 글자수 제한 (숫자, 없으면 null)
+      "charLimit": null
     }
   ],
-  "requirements": ["핵심 자격요건/우대사항 키워드들"],
-  "keywords": ["JD에서 반복 강조되는 역량/기술 키워드"]
-}`
+  "requirements": ["핵심 자격요건/우대사항 키워드들 (5~10개)"],
+  "keywords": ["JD에서 반복 강조되는 역량/기술 키워드 (5~10개)"]
+}
+
+규칙:
+- 자소서 문항이 명시되지 않은 공고도 많음. 그런 경우 questions는 빈 배열 []
+- charLimit은 명시된 경우만 숫자, 아니면 null
+- 회사명을 모르면 "company"는 빈 문자열 ""
+- 반드시 유효한 JSON. 따옴표 이스케이프 주의.`
 
 const MATCH_BLOCKS_PROMPT = `당신은 자소서 컨설턴트입니다.
 자소서 문항과 사용자의 경험 블록들을 보고, 각 문항에 가장 적합한 블록을 매칭하세요.
@@ -71,14 +77,56 @@ const RECOMMEND_INDUSTRIES_PROMPT = `당신은 커리어 컨설턴트입니다.
   "roles": ["추천 직무/포지션 (3~5개)"]
 }`
 
+// 강건한 JSON 추출 (태그/펜스/중괄호/전체 순서로 시도)
+function extractJson(text) {
+  if (!text) return null
+
+  // 1. ```json ... ``` 또는 ``` ... ```
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
+  if (fenced) {
+    try { return JSON.parse(fenced[1]) } catch {}
+  }
+
+  // 2. 첫 { 부터 마지막 } 까지
+  const firstBrace = text.indexOf('{')
+  const lastBrace = text.lastIndexOf('}')
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try { return JSON.parse(text.slice(firstBrace, lastBrace + 1)) } catch {}
+  }
+
+  // 3. 전체를 그대로
+  try { return JSON.parse(text.trim()) } catch {}
+
+  return null
+}
+
 export async function parseJobPosting(rawText) {
   const messages = [
     { role: 'system', content: PARSE_JOB_POSTING_PROMPT },
     { role: 'user', content: rawText }
   ]
-  const response = await sendMessage(messages)
-  return JSON.parse(response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim())
+  // 공고가 긴 경우 대비 토큰 확보
+  const response = await sendMessage(messages, { maxOutputTokens: 2048, temperature: 0.3 })
+  const parsed = extractJson(response)
+  if (!parsed) {
+    throw new Error('공고 분석 결과를 JSON으로 해석하지 못했습니다.')
+  }
+  return {
+    company: parsed.company || '',
+    position: parsed.position || '',
+    questions: Array.isArray(parsed.questions) ? parsed.questions : [],
+    requirements: Array.isArray(parsed.requirements) ? parsed.requirements : [],
+    keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
+  }
 }
+
+// 기본 자소서 문항 (공고에 문항이 없을 때 사용)
+export const DEFAULT_QUESTIONS = [
+  { text: '해당 직무에 지원한 이유와 관련 경험을 서술해주세요.', charLimit: 800 },
+  { text: '본인의 강점과 이를 활용한 경험을 구체적으로 서술해주세요.', charLimit: 500 },
+  { text: '팀워크를 발휘하거나 어려움을 극복한 경험을 서술해주세요.', charLimit: 500 },
+  { text: '입사 후 기여하고 싶은 부분과 향후 목표를 서술해주세요.', charLimit: 500 },
+]
 
 export async function matchBlocksToQuestions(questions, blocks, requirements) {
   const blocksData = blocks.map(b => ({
@@ -104,8 +152,14 @@ export async function matchBlocksToQuestions(questions, blocks, requirements) {
       })
     }
   ]
-  const response = await sendMessage(messages)
-  return JSON.parse(response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim())
+  const response = await sendMessage(messages, { maxOutputTokens: 2048, temperature: 0.3 })
+  const parsed = extractJson(response)
+  if (!parsed) throw new Error('블록 매칭 결과를 해석하지 못했습니다.')
+  return {
+    matches: Array.isArray(parsed.matches) ? parsed.matches : [],
+    overallFit: typeof parsed.overallFit === 'number' ? parsed.overallFit : parseInt(parsed.overallFit) || 0,
+    missingAreas: Array.isArray(parsed.missingAreas) ? parsed.missingAreas : [],
+  }
 }
 
 export async function generateAnswer(question, block, jobInfo) {
@@ -132,8 +186,14 @@ export async function generateAnswer(question, block, jobInfo) {
       })
     }
   ]
-  const response = await sendMessage(messages)
-  return JSON.parse(response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim())
+  const response = await sendMessage(messages, { maxOutputTokens: 2048, temperature: 0.7 })
+  const parsed = extractJson(response)
+  if (!parsed) throw new Error('자소서 생성 결과를 해석하지 못했습니다.')
+  return {
+    answer: parsed.answer || '',
+    charCount: parsed.charCount || (parsed.answer?.length ?? 0),
+    usedKeywords: Array.isArray(parsed.usedKeywords) ? parsed.usedKeywords : [],
+  }
 }
 
 export async function recommendIndustries(block) {
@@ -152,6 +212,11 @@ export async function recommendIndustries(block) {
       })
     }
   ]
-  const response = await sendMessage(messages)
-  return JSON.parse(response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim())
+  const response = await sendMessage(messages, { maxOutputTokens: 1024, temperature: 0.5 })
+  const parsed = extractJson(response)
+  if (!parsed) return { industries: [], roles: [] }
+  return {
+    industries: Array.isArray(parsed.industries) ? parsed.industries : [],
+    roles: Array.isArray(parsed.roles) ? parsed.roles : [],
+  }
 }
