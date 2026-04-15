@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { CATEGORIES } from '../config/categories'
-import { createInterviewSession, buildApiMessages, parseBlockFromResponse, getDisplayText, MAX_TURNS } from '../lib/interviewEngine'
+import { createInterviewSession, buildApiMessages, parseBlockFromResponse, getDisplayText, buildBlockGenerationMessages, MAX_TURNS } from '../lib/interviewEngine'
 import { sendMessage } from '../lib/aiClient'
 import { supabase } from '../config/supabase'
 import BlockPreview from '../components/BlockPreview'
@@ -59,10 +59,43 @@ function ChatInterface({ session, onComplete }) {
   const [messages, setMessages] = useState(session.messages.map(m => ({ ...m, displayContent: m.content })))
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [generatingBlock, setGeneratingBlock] = useState(false)
   const [generatedBlock, setGeneratedBlock] = useState(null)
   const [turnCount, setTurnCount] = useState(session.turnCount)
+  const [blockError, setBlockError] = useState(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+
+  // 별도 API 호출로 블록 생성 (대화 컨텍스트 → 구조화된 JSON)
+  const generateBlock = async (currentMessages) => {
+    setGeneratingBlock(true)
+    setBlockError(null)
+    try {
+      const blockSession = {
+        ...session,
+        messages: currentMessages.map(m => ({ role: m.role, content: m.content })),
+      }
+      const blockMessages = buildBlockGenerationMessages(blockSession)
+
+      // 최대 2회 시도
+      let block = null
+      for (let i = 0; i < 2; i++) {
+        const response = await sendMessage(blockMessages)
+        block = parseBlockFromResponse(response)
+        if (block && block.title && block.situation) break
+      }
+
+      if (block) {
+        setGeneratedBlock(block)
+      } else {
+        setBlockError('블록 생성에 실패했습니다. 다시 시도해주세요.')
+      }
+    } catch (err) {
+      setBlockError(`오류: ${err.message}`)
+    } finally {
+      setGeneratingBlock(false)
+    }
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -91,8 +124,8 @@ function ChatInterface({ session, onComplete }) {
       const apiMessages = buildApiMessages(currentSession, text)
       const response = await sendMessage(apiMessages)
 
-      let block = parseBlockFromResponse(response)
-      const displayText = getDisplayText(response)
+      const inlineBlock = parseBlockFromResponse(response)
+      const displayText = getDisplayText(response) || response
 
       const aiMsg = { role: 'assistant', content: response, displayContent: displayText }
       const updatedMessages = [...newMessages, aiMsg]
@@ -100,29 +133,14 @@ function ChatInterface({ session, onComplete }) {
       const newTurnCount = turnCount + 1
       setTurnCount(newTurnCount)
 
-      // 마지막 턴인데 블록이 안 나왔으면 강제 재요청
-      if (!block && newTurnCount >= MAX_TURNS) {
-        const retrySession = {
-          ...session,
-          messages: updatedMessages.map(m => ({ role: m.role, content: m.content })),
-          turnCount: newTurnCount,
-        }
-        const retryMessages = buildApiMessages(retrySession, '지금까지 내용으로 블록을 만들어주세요.')
-        const retryResponse = await sendMessage(retryMessages)
-        block = parseBlockFromResponse(retryResponse)
-
-        if (block) {
-          const retryDisplay = getDisplayText(retryResponse)
-          setMessages(prev => [
-            ...prev,
-            { role: 'user', content: '지금까지 내용으로 블록을 만들어주세요.', displayContent: '지금까지 내용으로 블록을 만들어주세요.' },
-            { role: 'assistant', content: retryResponse, displayContent: retryDisplay },
-          ])
-        }
-      }
-
-      if (block) {
-        setGeneratedBlock(block)
+      // 인라인 블록이 나왔으면 바로 사용
+      if (inlineBlock && inlineBlock.title && inlineBlock.situation) {
+        setGeneratedBlock(inlineBlock)
+      } else if (newTurnCount >= MAX_TURNS) {
+        // 마지막 턴이면 별도 API 호출로 블록 생성
+        setLoading(false)
+        await generateBlock(updatedMessages)
+        return
       }
     } catch (err) {
       const errorMsg = {
@@ -176,9 +194,29 @@ function ChatInterface({ session, onComplete }) {
         {messages.map((msg, i) => (
           <ChatBubble key={i} message={msg} />
         ))}
-        {loading && (
+        {(loading || generatingBlock) && (
           <div className="flex justify-start">
             <TypingIndicator />
+          </div>
+        )}
+        {generatingBlock && (
+          <div className="flex justify-center">
+            <div className="text-xs text-primary-600 bg-primary-50 px-3 py-1.5 rounded-full">
+              ✨ 경험을 블록으로 정리하고 있어요...
+            </div>
+          </div>
+        )}
+        {blockError && (
+          <div className="flex justify-center">
+            <div className="text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">
+              {blockError}
+              <button
+                onClick={() => generateBlock(messages)}
+                className="ml-2 underline font-medium"
+              >
+                다시 시도
+              </button>
+            </div>
           </div>
         )}
         <div ref={messagesEndRef} />
@@ -186,15 +224,25 @@ function ChatInterface({ session, onComplete }) {
 
       {/* Input */}
       <div className="px-4 py-3 border-t border-slate-200 bg-white">
+        {/* 턴 3 이상이면 수동 블록 생성 버튼 노출 */}
+        {turnCount >= 3 && !generatingBlock && (
+          <button
+            onClick={() => generateBlock(messages)}
+            disabled={loading}
+            className="w-full mb-2 py-2 bg-amber-50 text-amber-700 rounded-lg text-xs font-medium hover:bg-amber-100 disabled:opacity-40 border border-amber-200"
+          >
+            ✨ 지금까지 내용으로 블록 만들기
+          </button>
+        )}
         <div className="flex gap-2">
           <textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="경험을 편하게 말해주세요..."
+            placeholder={turnCount >= MAX_TURNS ? '대화가 끝났어요. 블록을 만들고 있습니다...' : '경험을 편하게 말해주세요...'}
             rows={1}
-            disabled={loading}
+            disabled={loading || generatingBlock || turnCount >= MAX_TURNS}
             className="flex-1 px-4 py-2.5 border border-slate-300 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent disabled:bg-slate-50"
             style={{ minHeight: '42px', maxHeight: '120px' }}
             onInput={(e) => {
@@ -204,7 +252,7 @@ function ChatInterface({ session, onComplete }) {
           />
           <button
             onClick={handleSend}
-            disabled={loading || !input.trim()}
+            disabled={loading || generatingBlock || !input.trim() || turnCount >= MAX_TURNS}
             className="px-4 py-2.5 bg-primary-600 text-white rounded-xl text-sm font-medium hover:bg-primary-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
           >
             전송

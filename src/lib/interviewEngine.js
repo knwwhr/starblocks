@@ -102,15 +102,77 @@ export function buildApiMessages(session, userMessage) {
 }
 
 export function parseBlockFromResponse(text) {
-  const match = text.match(/<block_json>\s*([\s\S]*?)\s*<\/block_json>/)
-  if (!match) return null
-  try {
-    return JSON.parse(match[1])
-  } catch {
-    return null
+  if (!text) return null
+
+  // 1. <block_json> 태그
+  const taggedMatch = text.match(/<block_json>\s*([\s\S]*?)\s*<\/block_json>/)
+  if (taggedMatch) {
+    try { return JSON.parse(taggedMatch[1]) } catch {}
   }
+
+  // 2. ```json ... ``` 코드 펜스
+  const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
+  if (fencedMatch) {
+    try { return JSON.parse(fencedMatch[1]) } catch {}
+  }
+
+  // 3. 중괄호로 감싸인 JSON 본문 직접 추출
+  const braceMatch = text.match(/\{[\s\S]*"title"[\s\S]*"situation"[\s\S]*"action"[\s\S]*\}/)
+  if (braceMatch) {
+    try { return JSON.parse(braceMatch[0]) } catch {}
+  }
+
+  // 4. 전체 텍스트가 JSON인 경우
+  try {
+    const parsed = JSON.parse(text.trim())
+    if (parsed.title && parsed.situation) return parsed
+  } catch {}
+
+  return null
 }
 
 export function getDisplayText(text) {
-  return text.replace(/<block_json>[\s\S]*?<\/block_json>/, '').trim()
+  return text
+    .replace(/<block_json>[\s\S]*?<\/block_json>/, '')
+    .replace(/```(?:json)?\s*[\s\S]*?\s*```/g, '')
+    .trim()
+}
+
+const BLOCK_GENERATION_PROMPT = `당신은 대화 내용을 경험 블록(STAR)으로 구조화하는 전문가입니다.
+
+아래 대화 내용을 바탕으로 경험 블록을 생성하세요.
+반드시 JSON 형식으로만 응답하세요. 다른 설명, 인사말, 머리말은 절대 포함하지 마세요.
+
+필수 JSON 구조:
+{
+  "title": "블록 제목 (경험을 한 문장으로, 20자 이내)",
+  "situation": "상황 설명 (2~3문장, 맥락/규모/제약 포함)",
+  "action": "구체적 행동 (번호 매겨서 2~4개, 문장마다 줄바꿈)",
+  "result": "결과 (구체적, 가능하면 수치)",
+  "lesson": "배운점 (한 문장)",
+  "tags": ["#태그1", "#태그2", "#태그3"],
+  "recommended_questions": ["추천 자소서 문항 유형 2~3개"],
+  "strength_score": 3,
+  "ai_insight": "채용 담당자가 주목할 포인트 (2~3줄)"
+}
+
+규칙:
+- 정보가 부족한 필드는 대화에서 추론하여 자연스럽게 작성
+- strength_score는 1~5 (대화 정보량과 구체성 기준)
+- tags는 #으로 시작, 3~5개
+- 반드시 유효한 JSON, 다른 텍스트 금지`
+
+export function buildBlockGenerationMessages(session) {
+  const cat = getCategoryLabel(session.category)
+  const conversation = session.messages
+    .map(m => `[${m.role === 'user' ? '지원자' : '인터뷰어'}] ${m.content}`)
+    .join('\n\n')
+
+  return [
+    { role: 'system', content: BLOCK_GENERATION_PROMPT },
+    {
+      role: 'user',
+      content: `카테고리: ${cat}\n\n=== 대화 내용 ===\n${conversation}\n\n위 대화를 바탕으로 경험 블록 JSON을 생성하세요.`
+    }
+  ]
 }
