@@ -187,10 +187,11 @@ MAU 1,000명, 유료 전환 10% (100명), 하이브리드 모델
 - action (text) -- 행동
 - result (text) -- 결과
 - lesson (text) -- 배운점
-- tags (text[]) -- #위기대응, #리더십 등
+- tags (text[]) -- #위기대응, #리더십 등 (10개 표준 역량으로 제약)
 - recommended_questions (text[]) -- 추천 문항 유형
 - strength_score (int) -- 경험 강도 1~5
 - ai_insight (text) -- AI가 발견한 가치 포인트
+- recommended_industries (jsonb) -- 업종/직무 AI 추천 캐시 { industries: [{name, reason}], roles: [] }
 - created_at, updated_at
 ```
 
@@ -210,16 +211,21 @@ MAU 1,000명, 유료 전환 10% (100명), 하이브리드 모델
 
 ## 8. 구현 현황
 
-### 완료 (2026-04-14)
+### 완료 (2026-04-15)
 - [x] 회원가입/로그인 (Supabase Auth)
 - [x] AI 대화형 인터뷰 (5턴 고정, Gemini Flash)
 - [x] 경험 블록 생성/저장/삭제
-- [x] 대시보드 (블록 목록 + 역량 커버리지)
+- [x] 대시보드 (블록 목록 + 역량 커버리지 + 집계 업종/직무 추천)
+- [x] 블록 카드 펼침 시 인터뷰 대화 이력 보기 (interview_sessions 조회)
 - [x] 블록 결과 화면 (업종/직무 AI 추천 + 역량 현황)
+- [x] 업종/직무 추천 DB 캐싱 (recommended_industries jsonb) — AI 재호출 방지
+- [x] 역량 태그 10개 표준 제약 + alias 매핑으로 커버리지 정확도 개선
 - [x] 자소서 작성 (공고 파싱 → 블록 매칭 → 문항별 초안 생성)
+- [x] 공고에 문항 없을 때 수동 입력/기본 문항 선택 지원
 - [x] GitHub Pages 자동 배포
 
 ### To-do
+- [ ] "블록" 네이밍 재검토 (예: 경험 카드)
 - [ ] 회사 DB 구축 (업종/회사 정보 + 유저 블록 집계)
 - [ ] AI 모델 하이브리드 (대화: Gemini Flash, 자소서: Sonnet 4)
 - [ ] 유료 과금 (무료: 블록 3개+자소서 1회, 프로 월 4,900원: 무제한+고품질)
