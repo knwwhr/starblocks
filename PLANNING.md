@@ -171,6 +171,7 @@ MAU 1,000명, 유료 전환 10% (100명), 하이브리드 모델
 | 백엔드/DB | Supabase | Auth + PostgreSQL + Realtime |
 | AI (현재) | Gemini Flash (무료) | 전 기능 통합, 비용 0원 |
 | AI (To-be) | Haiku(대화) + Sonnet(자소서) | 하이브리드 — 자소서 품질 극대화 |
+| AI 프록시 | Supabase Edge Function (`gemini-proxy`) | API 키 서버 보관, 인증·사용량 제한 집중 |
 | 배포 | GitHub Pages | 무료 호스팅, GitHub Actions 자동 배포 |
 
 ---
@@ -207,6 +208,20 @@ MAU 1,000명, 유료 전환 10% (100명), 하이브리드 모델
 - created_at, completed_at
 ```
 
+### usage_counters (2026-04-19 추가)
+```sql
+- id (uuid, PK)
+- user_id (uuid, FK → auth.users)
+- month (text) -- 'YYYY-MM'
+- blocks_created (int) -- 월별 생성 블록 수
+- cover_letters_generated (int) -- 월별 생성 자소서 수
+- plan (text) -- 'free' | 'pro' | 'insight'
+- UNIQUE (user_id, month)
+```
+- SELECT만 RLS 허용, 쓰기는 `increment_usage(user_id, month, column)` RPC만 (SECURITY DEFINER)
+- Edge Function `gemini-proxy`에서 action이 `block_gen` | `answer_gen`일 때만 증가
+- free 플랜이 한도 초과 시 402 `{ error: "limit_reached", scope, limit }` 반환
+
 ---
 
 ## 8. 구현 현황
@@ -224,18 +239,30 @@ MAU 1,000명, 유료 전환 10% (100명), 하이브리드 모델
 - [x] 공고에 문항 없을 때 수동 입력/기본 문항 선택 지원
 - [x] GitHub Pages 자동 배포
 
+### 완료 (2026-04-19) — 보안/UX 스프린트
+- [x] **Gemini API 키 서버 이동** — Supabase Edge Function `gemini-proxy` 도입, 클라이언트 번들에서 키 제거
+- [x] **사용량 제한 인프라** — `usage_counters` 테이블 + `increment_usage` RPC (SECURITY DEFINER), 월별 집계
+- [x] **무료 플랜 하드 한도** — 블록 3개/월, 자소서 1회/월 (Edge Function에서 402 반환)
+- [x] **토스트 UI** — `ToastContext` 도입, `alert`/`console.error` 전부 교체
+- [x] **자소서 병렬 생성** — `Promise.allSettled`로 문항별 동시 생성 (~4x)
+- [x] **업종 추천 백그라운드화** — 블록 저장 시 동기 대기 제거, 저장 후 비동기 업데이트
+- [x] **인터뷰 세션 복구** — localStorage 드래프트 + 재진입 시 "이어하기" 옵션
+- [x] **블록 수정** — `/block/:id/edit` 라우트, STAR 필드/태그/강도/인사이트 편집
+- [x] **SEO/OG 메타** — index.html description, og:*, twitter:card
+
 ### To-do
 - [ ] "블록" 네이밍 재검토 (예: 경험 카드)
 - [ ] 회사 DB 구축 (업종/회사 정보 + 유저 블록 집계)
 - [ ] AI 모델 하이브리드 (대화: Gemini Flash, 자소서: Sonnet 4)
-- [ ] 유료 과금 (무료: 블록 3개+자소서 1회, 프로 월 4,900원: 무제한+고품질)
+- [ ] 유료 과금 결제 연동 (프로 월 4,900원 / 인사이트 월 9,900원) — 한도는 이미 적용됨
 - [ ] 합격자 인사이트 (회사별 블록 통계, 문항별 경험 유형 분석)
-- [ ] 블록 수정 기능 (저장 후 편집)
 - [ ] 소셜 로그인 (Google/Kakao)
 - [ ] 자소서 PDF 내보내기
-- [ ] 인터뷰 세션 복구 (브라우저 이탈 시)
 - [ ] insidejob 연동 (진단 결과 → 부족 역량 → 블록 빌더 유도)
 - [ ] 면접 시뮬레이션 (블록 기반 예상 질문 + 모의 면접)
+- [ ] 분석/이벤트 추적 (GA4 또는 PostHog) — 퍼널 측정
+- [ ] TypeScript 전환 또는 PropTypes 도입
+- [ ] 테스트 코드 (parseBlockFromResponse, mapTagToCompetency 등)
 
 ---
 
