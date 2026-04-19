@@ -106,7 +106,7 @@ export async function parseJobPosting(rawText) {
     { role: 'user', content: rawText }
   ]
   // 공고가 긴 경우 대비 토큰 확보
-  const response = await sendMessage(messages, { maxOutputTokens: 2048, temperature: 0.3 })
+  const response = await sendMessage(messages, { action: 'job_parse', maxOutputTokens: 2048, temperature: 0.3 })
   const parsed = extractJson(response)
   if (!parsed) {
     throw new Error('공고 분석 결과를 JSON으로 해석하지 못했습니다.')
@@ -152,7 +152,7 @@ export async function matchBlocksToQuestions(questions, blocks, requirements) {
       })
     }
   ]
-  const response = await sendMessage(messages, { maxOutputTokens: 2048, temperature: 0.3 })
+  const response = await sendMessage(messages, { action: 'block_match', maxOutputTokens: 2048, temperature: 0.3 })
   const parsed = extractJson(response)
   if (!parsed) throw new Error('블록 매칭 결과를 해석하지 못했습니다.')
   return {
@@ -186,7 +186,7 @@ export async function generateAnswer(question, block, jobInfo) {
       })
     }
   ]
-  const response = await sendMessage(messages, { maxOutputTokens: 2048, temperature: 0.7 })
+  const response = await sendMessage(messages, { action: 'answer_gen', maxOutputTokens: 2048, temperature: 0.7 })
   const parsed = extractJson(response)
   if (!parsed) throw new Error('자소서 생성 결과를 해석하지 못했습니다.')
   return {
@@ -212,7 +212,7 @@ export async function recommendIndustries(block) {
       })
     }
   ]
-  const response = await sendMessage(messages, { maxOutputTokens: 1024, temperature: 0.5 })
+  const response = await sendMessage(messages, { action: 'industry_rec', maxOutputTokens: 1024, temperature: 0.5 })
   const parsed = extractJson(response)
   if (!parsed) return { industries: [], roles: [] }
   return {

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../config/supabase'
 import { CATEGORIES, COMPETENCY_TAGS, mapTagToCompetency } from '../config/categories'
+import { useToast } from '../contexts/ToastContext'
 
 function InterviewTranscript({ blockId }) {
   const [messages, setMessages] = useState(null)
@@ -116,7 +117,14 @@ function BlockCard({ block, onDelete }) {
 
           <InterviewTranscript blockId={block.id} />
 
-          <div className="flex justify-end pt-2">
+          <div className="flex justify-end pt-2 gap-3">
+            <Link
+              to={`/block/${block.id}/edit`}
+              onClick={(e) => e.stopPropagation()}
+              className="text-xs text-primary-600 hover:text-primary-800 no-underline"
+            >
+              수정
+            </Link>
             <button
               onClick={(e) => { e.stopPropagation(); onDelete(block.id) }}
               className="text-xs text-red-400 hover:text-red-600"
@@ -254,6 +262,7 @@ export default function DashboardPage() {
   const { user } = useAuth()
   const [blocks, setBlocks] = useState([])
   const [loading, setLoading] = useState(true)
+  const toast = useToast()
 
   useEffect(() => {
     if (!user) return
@@ -274,7 +283,12 @@ export default function DashboardPage() {
   const handleDelete = async (id) => {
     if (!confirm('이 블록을 삭제하시겠습니까?')) return
     const { error } = await supabase.from('experience_blocks').delete().eq('id', id)
-    if (!error) setBlocks(prev => prev.filter(b => b.id !== id))
+    if (error) {
+      toast.error('삭제에 실패했습니다.')
+    } else {
+      setBlocks(prev => prev.filter(b => b.id !== id))
+      toast.success('블록이 삭제되었습니다.')
+    }
   }
 
   if (loading) {

@@ -4,6 +4,8 @@ import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../config/supabase'
 import { CATEGORIES } from '../config/categories'
 import { parseJobPosting, matchBlocksToQuestions, generateAnswer, DEFAULT_QUESTIONS } from '../lib/coverLetterEngine'
+import { UsageLimitError } from '../lib/aiClient'
+import { useToast } from '../contexts/ToastContext'
 
 function JobPostingInput({ onAnalyze, loading, error }) {
   const [rawText, setRawText] = useState('')
@@ -264,6 +266,7 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
   const [answers, setAnswers] = useState({})
   const [generatingIndex, setGeneratingIndex] = useState(null)
   const [generatingAll, setGeneratingAll] = useState(false)
+  const toast = useToast()
 
   const getMatchedBlock = (questionIndex) => {
     const match = matchResult.matches?.find(m => m.questionIndex === questionIndex)
@@ -285,6 +288,11 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
       setAnswers(prev => ({ ...prev, [questionIndex]: result }))
     } catch (err) {
       console.error('Generate error:', err)
+      if (err instanceof UsageLimitError) {
+        toast.error(err.message)
+      } else {
+        toast.error('자소서 생성에 실패했습니다. 잠시 후 다시 시도해주세요.')
+      }
     } finally {
       setGeneratingIndex(null)
     }
@@ -292,19 +300,31 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
 
   const handleGenerateAll = async () => {
     setGeneratingAll(true)
-    for (let i = 0; i < questions.length; i++) {
-      const block = getMatchedBlock(i)
-      if (block && !answers[i]) {
-        setGeneratingIndex(i)
-        try {
-          const result = await generateAnswer(questions[i], block, jobInfo)
-          setAnswers(prev => ({ ...prev, [i]: result }))
-        } catch (err) {
-          console.error(`Generate error for question ${i}:`, err)
+    const tasks = questions
+      .map((q, i) => ({ q, i, block: getMatchedBlock(i) }))
+      .filter(({ i, block }) => block && !answers[i])
+
+    const results = await Promise.allSettled(
+      tasks.map(({ q, block }) => generateAnswer(q, block, jobInfo))
+    )
+
+    let limitHit = false
+    let failures = 0
+    setAnswers(prev => {
+      const next = { ...prev }
+      results.forEach((r, idx) => {
+        if (r.status === 'fulfilled') {
+          next[tasks[idx].i] = r.value
+        } else {
+          if (r.reason instanceof UsageLimitError) limitHit = r.reason
+          else failures++
+          console.error(`Generate error for question ${tasks[idx].i}:`, r.reason)
         }
-        setGeneratingIndex(null)
-      }
-    }
+      })
+      return next
+    })
+    if (limitHit) toast.error(limitHit.message)
+    else if (failures > 0) toast.error(`${failures}개 문항 생성에 실패했습니다.`)
     setGeneratingAll(false)
   }
 
@@ -318,6 +338,7 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
       return `[문항 ${i + 1}] ${q.text}\n\n${ans?.answer || '(미작성)'}`
     }).join('\n\n---\n\n')
     navigator.clipboard.writeText(text)
+    toast.success('자소서 전체가 클립보드에 복사되었습니다.')
   }
 
   const answeredCount = Object.keys(answers).length

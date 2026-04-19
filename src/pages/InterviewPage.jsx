@@ -3,14 +3,37 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { CATEGORIES } from '../config/categories'
 import { createInterviewSession, buildApiMessages, parseBlockFromResponse, getDisplayText, buildBlockGenerationMessages, MAX_TURNS } from '../lib/interviewEngine'
-import { sendMessage } from '../lib/aiClient'
+import { sendMessage, UsageLimitError } from '../lib/aiClient'
+import { useToast } from '../contexts/ToastContext'
 import { supabase } from '../config/supabase'
 import { recommendIndustries } from '../lib/coverLetterEngine'
 import BlockPreview from '../components/BlockPreview'
 
-function CategorySelector({ onSelect }) {
+const DRAFT_KEY = 'starblocks:interview_draft'
+
+function CategorySelector({ onSelect, draft, onResume, onDiscard }) {
   return (
     <div className="max-w-2xl mx-auto px-4 py-12">
+      {draft && (
+        <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between">
+          <div>
+            <div className="text-sm font-bold text-amber-900">진행 중이던 인터뷰가 있어요</div>
+            <div className="text-xs text-amber-700 mt-0.5">
+              {CATEGORIES.find(c => c.id === draft.category)?.label} · {draft.turnCount}턴 진행
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={onDiscard}
+              className="text-xs text-slate-500 px-3 py-1.5 hover:text-slate-700"
+            >버리기</button>
+            <button
+              onClick={onResume}
+              className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-amber-700"
+            >이어하기</button>
+          </div>
+        </div>
+      )}
       <h1 className="text-2xl font-bold text-slate-900 text-center mb-2">어떤 경험을 정리해볼까요?</h1>
       <p className="text-sm text-slate-500 text-center mb-8">카테고리를 선택하면 AI 인터뷰가 시작됩니다.</p>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -67,6 +90,19 @@ function ChatInterface({ session, onComplete }) {
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
 
+  // Persist draft so the user can resume after refresh/navigation.
+  useEffect(() => {
+    if (generatedBlock) return // 블록 생성 완료 후엔 draft 유지 불필요 (완료 시 삭제)
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        category: session.category,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        turnCount,
+        savedAt: Date.now(),
+      }))
+    } catch {}
+  }, [messages, turnCount, session.category, generatedBlock])
+
   // 별도 API 호출로 블록 생성 (대화 컨텍스트 → 구조화된 JSON)
   const generateBlock = async (currentMessages) => {
     setGeneratingBlock(true)
@@ -81,7 +117,7 @@ function ChatInterface({ session, onComplete }) {
       // 최대 2회 시도
       let block = null
       for (let i = 0; i < 2; i++) {
-        const response = await sendMessage(blockMessages)
+        const response = await sendMessage(blockMessages, { action: 'block_gen' })
         block = parseBlockFromResponse(response)
         if (block && block.title && block.situation) break
       }
@@ -123,7 +159,7 @@ function ChatInterface({ session, onComplete }) {
         turnCount,
       }
       const apiMessages = buildApiMessages(currentSession, text)
-      const response = await sendMessage(apiMessages)
+      const response = await sendMessage(apiMessages, { action: 'interview' })
 
       const inlineBlock = parseBlockFromResponse(response)
       const displayText = getDisplayText(response) || response
@@ -267,12 +303,41 @@ function ChatInterface({ session, onComplete }) {
 
 export default function InterviewPage() {
   const [session, setSession] = useState(null)
+  const [draft, setDraft] = useState(null)
   const { user } = useAuth()
   const navigate = useNavigate()
+  const toast = useToast()
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (parsed?.category && Array.isArray(parsed.messages) && parsed.messages.length > 0) {
+        setDraft(parsed)
+      }
+    } catch {}
+  }, [])
 
   const handleCategorySelect = (categoryId) => {
     const newSession = createInterviewSession(categoryId)
     setSession(newSession)
+  }
+
+  const handleResume = () => {
+    if (!draft) return
+    setSession({
+      category: draft.category,
+      messages: draft.messages,
+      status: 'in_progress',
+      turnCount: draft.turnCount || 0,
+    })
+    setDraft(null)
+  }
+
+  const handleDiscardDraft = () => {
+    localStorage.removeItem(DRAFT_KEY)
+    setDraft(null)
   }
 
   const handleComplete = async (block, messages, turnCount, category) => {
@@ -282,15 +347,7 @@ export default function InterviewPage() {
     }
 
     try {
-      // 업종 추천 병렬 호출 (실패해도 블록 저장은 진행)
-      let recommendation = null
-      try {
-        recommendation = await recommendIndustries({ ...block, category })
-      } catch (e) {
-        console.warn('Recommendation failed, saving without it:', e)
-      }
-
-      // Save block
+      // Save block immediately (recommendIndustries는 저장 후 백그라운드)
       const { data: savedBlock, error: blockError } = await supabase
         .from('experience_blocks')
         .insert({
@@ -305,12 +362,23 @@ export default function InterviewPage() {
           recommended_questions: block.recommended_questions || [],
           strength_score: block.strength_score || 3,
           ai_insight: block.ai_insight,
-          recommended_industries: recommendation || {},
+          recommended_industries: {},
         })
         .select()
         .single()
 
       if (blockError) throw blockError
+
+      // 백그라운드로 업종 추천 채워넣기 (사용자 흐름 차단하지 않음)
+      recommendIndustries({ ...block, category })
+        .then(rec => {
+          if (!rec || (!rec.industries?.length && !rec.roles?.length)) return
+          supabase
+            .from('experience_blocks')
+            .update({ recommended_industries: rec })
+            .eq('id', savedBlock.id)
+        })
+        .catch(e => console.warn('Recommendation failed:', e))
 
       // Save interview session
       await supabase
@@ -325,15 +393,29 @@ export default function InterviewPage() {
           completed_at: new Date().toISOString(),
         })
 
+      // 저장 성공 시 draft 제거
+      try { localStorage.removeItem(DRAFT_KEY) } catch {}
+
       navigate('/block-result', { state: { block: { ...savedBlock, category } } })
     } catch (err) {
       console.error('Save error:', err)
-      alert('저장 중 오류가 발생했습니다. 다시 시도해주세요.')
+      if (err instanceof UsageLimitError) {
+        toast.error(err.message + ' 프로 플랜으로 업그레이드해주세요.')
+      } else {
+        toast.error('저장 중 오류가 발생했습니다. 다시 시도해주세요.')
+      }
     }
   }
 
   if (!session) {
-    return <CategorySelector onSelect={handleCategorySelect} />
+    return (
+      <CategorySelector
+        onSelect={handleCategorySelect}
+        draft={draft}
+        onResume={handleResume}
+        onDiscard={handleDiscardDraft}
+      />
+    )
   }
 
   return <ChatInterface session={session} onComplete={handleComplete} />

@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { ToastProvider } from './contexts/ToastContext'
 import Layout from './components/Layout'
 import LandingPage from './pages/LandingPage'
 import LoginPage from './pages/LoginPage'
@@ -7,6 +8,7 @@ import InterviewPage from './pages/InterviewPage'
 import DashboardPage from './pages/DashboardPage'
 import BlockResultPage from './pages/BlockResultPage'
 import CoverLetterPage from './pages/CoverLetterPage'
+import BlockEditPage from './pages/BlockEditPage'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -55,6 +57,14 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/block/:id/edit"
+          element={
+            <ProtectedRoute>
+              <BlockEditPage />
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </Layout>
   )
@@ -63,9 +73,11 @@ function AppRoutes() {
 export default function App() {
   return (
     <BrowserRouter basename="/starblocks">
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </ToastProvider>
     </BrowserRouter>
   )
 }

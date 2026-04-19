@@ -29,22 +29,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Debug secrets
-        run: |
-          echo "SUPABASE_URL length: ${#VITE_SUPABASE_URL}"
-          echo "ANON_KEY length: ${#VITE_SUPABASE_ANON_KEY}"
-          echo "GEMINI_KEY length: ${#VITE_GEMINI_API_KEY}"
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
-
       - name: Build
         run: npm run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
 
       - uses: actions/configure-pages@v4
 

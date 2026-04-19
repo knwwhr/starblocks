@@ -1,42 +1,41 @@
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
+import { supabase } from '../config/supabase'
+
+const FUNCTION_NAME = 'gemini-proxy'
+
+export class UsageLimitError extends Error {
+  constructor(scope, limit) {
+    super(`월 ${scope === 'blocks' ? '블록' : '자소서'} 생성 한도(${limit}회)에 도달했습니다.`)
+    this.name = 'UsageLimitError'
+    this.scope = scope
+    this.limit = limit
+  }
+}
 
 export async function sendMessage(messages, options = {}) {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY
-  if (!apiKey) {
-    throw new Error('VITE_GEMINI_API_KEY가 설정되지 않았습니다.')
-  }
+  const action = options.action || 'interview'
 
-  const model = options.model || 'gemini-flash-latest'
-  const systemMessage = messages.find(m => m.role === 'system')
-  const chatMessages = messages.filter(m => m.role !== 'system')
-
-  // Gemini 형식으로 변환
-  const contents = chatMessages.map(m => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }]
-  }))
-
-  const response = await fetch(`${GEMINI_API_URL}/${model}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-goog-api-key': apiKey,
+  const { data, error } = await supabase.functions.invoke(FUNCTION_NAME, {
+    body: {
+      action,
+      messages,
+      model: options.model,
+      maxOutputTokens: options.maxOutputTokens,
+      temperature: options.temperature,
     },
-    body: JSON.stringify({
-      system_instruction: systemMessage ? { parts: [{ text: systemMessage.content }] } : undefined,
-      contents,
-      generationConfig: {
-        maxOutputTokens: options.maxOutputTokens || 2048,
-        temperature: options.temperature ?? 0.8,
-      },
-    }),
   })
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.error?.message || `API 오류: ${response.status}`)
+  if (error) {
+    // supabase-js wraps non-2xx as FunctionsHttpError. Dig into context.
+    const ctx = error.context
+    if (ctx?.status === 402) {
+      const parsed = await ctx.json?.().catch(() => null)
+      if (parsed?.error === 'limit_reached') {
+        throw new UsageLimitError(parsed.scope, parsed.limit)
+      }
+    }
+    throw new Error(error.message || 'AI 호출에 실패했습니다.')
   }
 
-  const data = await response.json()
-  return data.candidates[0].content.parts[0].text
+  if (!data?.text) throw new Error('AI 응답이 비어있습니다.')
+  return data.text
 }
