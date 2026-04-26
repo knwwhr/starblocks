@@ -4,7 +4,7 @@ export const CATEGORY_GROUPS = {
   academic:  { label: '학업/연구', accent: 'sky',    bar: 'bg-sky-500',    soft: 'bg-sky-50',    text: 'text-sky-700' },
   practical: { label: '실무',      accent: 'emerald',bar: 'bg-emerald-500',soft: 'bg-emerald-50',text: 'text-emerald-700' },
   challenge: { label: '도전',      accent: 'amber',  bar: 'bg-amber-500',  soft: 'bg-amber-50',  text: 'text-amber-700' },
-  external:  { label: '대외활동',  accent: 'violet', bar: 'bg-violet-500', soft: 'bg-violet-50', text: 'text-violet-700' },
+  external:  { label: '대외활동',  accent: 'rose',   bar: 'bg-rose-500',   soft: 'bg-rose-50',   text: 'text-rose-700' },
 }
 
 export const CATEGORIES = [

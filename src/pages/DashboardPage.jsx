@@ -119,7 +119,7 @@ function CompetencyRadar({ blocks }) {
           <RadarChart data={data} margin={{ top: 10, right: 20, bottom: 10, left: 20 }}>
             <PolarGrid stroke="#e2e8f0" />
             <PolarAngleAxis dataKey="competency" tick={{ fill: '#64748b', fontSize: 10 }} />
-            <Radar dataKey="value" stroke="#2563eb" fill="#2563eb" fillOpacity={0.25} />
+            <Radar dataKey="value" stroke="#7c3aed" fill="#7c3aed" fillOpacity={0.25} />
           </RadarChart>
         </ResponsiveContainer>
       </div>
