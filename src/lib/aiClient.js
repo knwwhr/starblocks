@@ -21,6 +21,8 @@ export async function sendMessage(messages, options = {}) {
       model: options.model,
       maxOutputTokens: options.maxOutputTokens,
       temperature: options.temperature,
+      coverLetterId: options.coverLetterId,
+      questionIndex: options.questionIndex,
     },
   })
 

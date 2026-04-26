@@ -1,13 +1,27 @@
+// 카테고리 그룹 — UI 컬러 액센트의 의미 단위
+// academic(학업/연구) / practical(실무) / challenge(도전) / external(대외활동)
+export const CATEGORY_GROUPS = {
+  academic:  { label: '학업/연구', accent: 'sky',    bar: 'bg-sky-500',    soft: 'bg-sky-50',    text: 'text-sky-700' },
+  practical: { label: '실무',      accent: 'emerald',bar: 'bg-emerald-500',soft: 'bg-emerald-50',text: 'text-emerald-700' },
+  challenge: { label: '도전',      accent: 'amber',  bar: 'bg-amber-500',  soft: 'bg-amber-50',  text: 'text-amber-700' },
+  external:  { label: '대외활동',  accent: 'violet', bar: 'bg-violet-500', soft: 'bg-violet-50', text: 'text-violet-700' },
+}
+
 export const CATEGORIES = [
-  { id: 'team_project', label: '팀 프로젝트', emoji: '🎓', description: '학교/직장에서 팀으로 진행한 프로젝트' },
-  { id: 'internship', label: '인턴/직무 경험', emoji: '💼', description: '인턴십, 정규직, 계약직 등 직무 경험' },
-  { id: 'competition', label: '공모전/대회', emoji: '🏆', description: '공모전, 해커톤, 경진대회 참여' },
-  { id: 'personal_project', label: '개인 프로젝트', emoji: '🔧', description: '혼자 진행한 사이드 프로젝트' },
-  { id: 'club_activity', label: '동아리/대외활동', emoji: '👥', description: '동아리, 학생회, 봉사활동, 대외활동' },
-  { id: 'part_time', label: '아르바이트', emoji: '💪', description: '아르바이트, 파트타임 근무 경험' },
-  { id: 'certification', label: '자격증/교육', emoji: '📚', description: '자격증 취득, 교육과정 수료' },
-  { id: 'overseas', label: '해외 경험', emoji: '🌏', description: '교환학생, 해외 인턴, 워킹홀리데이' },
+  { id: 'team_project',     label: '팀 프로젝트',     emoji: '🎓', group: 'academic',  description: '학교/직장에서 팀으로 진행한 프로젝트' },
+  { id: 'internship',       label: '인턴/직무 경험',  emoji: '💼', group: 'practical', description: '인턴십, 정규직, 계약직 등 직무 경험' },
+  { id: 'competition',      label: '공모전/대회',     emoji: '🏆', group: 'challenge', description: '공모전, 해커톤, 경진대회 참여' },
+  { id: 'personal_project', label: '개인 프로젝트',   emoji: '🔧', group: 'challenge', description: '혼자 진행한 사이드 프로젝트' },
+  { id: 'club_activity',    label: '동아리/대외활동', emoji: '👥', group: 'external',  description: '동아리, 학생회, 봉사활동, 대외활동' },
+  { id: 'part_time',        label: '아르바이트',      emoji: '💪', group: 'practical', description: '아르바이트, 파트타임 근무 경험' },
+  { id: 'certification',    label: '자격증/교육',     emoji: '📚', group: 'academic',  description: '자격증 취득, 교육과정 수료' },
+  { id: 'overseas',         label: '해외 경험',       emoji: '🌏', group: 'external',  description: '교환학생, 해외 인턴, 워킹홀리데이' },
 ]
+
+export function getCategoryGroup(categoryId) {
+  const cat = CATEGORIES.find(c => c.id === categoryId)
+  return cat ? CATEGORY_GROUPS[cat.group] : null
+}
 
 export const COMPETENCY_TAGS = [
   { id: 'leadership', label: '리더십', color: 'bg-purple-100 text-purple-700', aliases: ['리더', '주도', '이끎'] },

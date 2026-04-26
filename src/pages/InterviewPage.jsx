@@ -79,7 +79,7 @@ function ChatBubble({ message }) {
   )
 }
 
-function ChatInterface({ session, onComplete }) {
+function ChatInterface({ session, onComplete, onAbort }) {
   const [messages, setMessages] = useState(session.messages.map(m => ({ ...m, displayContent: m.content })))
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -214,15 +214,27 @@ function ChatInterface({ session, onComplete }) {
     <div className="max-w-2xl mx-auto flex flex-col h-[calc(100vh-3.5rem)]">
       {/* Header */}
       <div className="px-4 py-3 border-b border-slate-200 bg-white">
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
             <h2 className="text-sm font-bold text-slate-900">경험 인터뷰</h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-400 truncate">
               {CATEGORIES.find(c => c.id === session.category)?.emoji}{' '}
               {CATEGORIES.find(c => c.id === session.category)?.label}
             </p>
           </div>
-          <div className="text-xs text-slate-400">{turnCount}/{MAX_TURNS}턴</div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs text-slate-400">{turnCount}/{MAX_TURNS}턴</span>
+            <button
+              onClick={() => {
+                if (turnCount > 0 && !confirm('진행 중인 인터뷰를 그만둘까요? 진행 내용은 임시 저장돼 다시 시작할 수 있어요.')) return
+                onAbort?.()
+              }}
+              className="text-xs text-slate-400 hover:text-slate-700 hover:bg-slate-100 px-2 py-1 rounded-md"
+              aria-label="인터뷰 중단"
+            >
+              그만두기
+            </button>
+          </div>
         </div>
       </div>
 
@@ -407,6 +419,21 @@ export default function InterviewPage() {
     }
   }
 
+  const handleAbort = () => {
+    // draft는 보존 (다시 시작 시 "이어하기" 노출). 세션만 해제.
+    setSession(null)
+    // draft 동기화: 현재 진행 상태를 draft로 다시 읽어옴
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed?.category && Array.isArray(parsed.messages) && parsed.messages.length > 0) {
+          setDraft(parsed)
+        }
+      }
+    } catch {}
+  }
+
   if (!session) {
     return (
       <CategorySelector
@@ -418,5 +445,5 @@ export default function InterviewPage() {
     )
   }
 
-  return <ChatInterface session={session} onComplete={handleComplete} />
+  return <ChatInterface session={session} onComplete={handleComplete} onAbort={handleAbort} />
 }

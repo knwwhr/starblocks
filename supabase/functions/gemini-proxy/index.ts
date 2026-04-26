@@ -17,6 +17,7 @@ type Action = 'interview' | 'block_gen' | 'job_parse' | 'block_match' | 'answer_
 const FREE_LIMITS = {
   blocks_per_month: 3,
   cover_letters_per_month: 1,
+  free_regens_per_question: 3, // 문항당 N회까지는 cover_letters_per_month 카운터 차감 X
 }
 
 function json(status: number, body: unknown) {
@@ -51,6 +52,8 @@ Deno.serve(async (req) => {
     model?: string
     maxOutputTokens?: number
     temperature?: number
+    coverLetterId?: string
+    questionIndex?: number
   }
   try {
     body = await req.json()
@@ -58,12 +61,16 @@ Deno.serve(async (req) => {
     return json(400, { error: 'Invalid JSON body' })
   }
 
-  const { action, messages, model, maxOutputTokens, temperature } = body
+  const { action, messages, model, maxOutputTokens, temperature, coverLetterId, questionIndex } = body
   if (!action || !Array.isArray(messages) || messages.length === 0) {
     return json(400, { error: 'action and messages required' })
   }
 
   // Usage limit enforcement for the two billable actions.
+  // For answer_gen we offer free regenerations per question (P3 policy):
+  //   - First N regenerations of the same question are free (no monthly counter increment)
+  //   - Subsequent regenerations consume the monthly cover_letters quota
+  let chargeMonthlyForAnswer = false
   if (action === 'block_gen' || action === 'answer_gen') {
     const month = new Date().toISOString().slice(0, 7) // YYYY-MM
     const { data: usage } = await supabase
@@ -74,12 +81,29 @@ Deno.serve(async (req) => {
       .maybeSingle()
 
     const plan = usage?.plan ?? 'free'
-    if (plan === 'free') {
-      if (action === 'block_gen' && (usage?.blocks_created ?? 0) >= FREE_LIMITS.blocks_per_month) {
+
+    if (action === 'block_gen' && plan === 'free') {
+      if ((usage?.blocks_created ?? 0) >= FREE_LIMITS.blocks_per_month) {
         return json(402, { error: 'limit_reached', scope: 'blocks', limit: FREE_LIMITS.blocks_per_month })
       }
-      if (action === 'answer_gen' && (usage?.cover_letters_generated ?? 0) >= FREE_LIMITS.cover_letters_per_month) {
-        return json(402, { error: 'limit_reached', scope: 'cover_letters', limit: FREE_LIMITS.cover_letters_per_month })
+    }
+
+    if (action === 'answer_gen') {
+      let priorVersions = 0
+      if (coverLetterId && typeof questionIndex === 'number') {
+        const { count } = await supabase
+          .from('cover_letter_answers')
+          .select('id', { count: 'exact', head: true })
+          .eq('cover_letter_id', coverLetterId)
+          .eq('question_index', questionIndex)
+        priorVersions = count ?? 0
+      }
+      const isFreeRegen = priorVersions < FREE_LIMITS.free_regens_per_question
+      if (!isFreeRegen) {
+        if (plan === 'free' && (usage?.cover_letters_generated ?? 0) >= FREE_LIMITS.cover_letters_per_month) {
+          return json(402, { error: 'limit_reached', scope: 'cover_letters', limit: FREE_LIMITS.cover_letters_per_month })
+        }
+        chargeMonthlyForAnswer = true
       }
     }
   }
@@ -118,10 +142,12 @@ Deno.serve(async (req) => {
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 
   // Increment usage counters after successful billable action.
-  if (action === 'block_gen' || action === 'answer_gen') {
+  if (action === 'block_gen') {
     const month = new Date().toISOString().slice(0, 7)
-    const column = action === 'block_gen' ? 'blocks_created' : 'cover_letters_generated'
-    await supabase.rpc('increment_usage', { p_user_id: userId, p_month: month, p_column: column })
+    await supabase.rpc('increment_usage', { p_user_id: userId, p_month: month, p_column: 'blocks_created' })
+  } else if (action === 'answer_gen' && chargeMonthlyForAnswer) {
+    const month = new Date().toISOString().slice(0, 7)
+    await supabase.rpc('increment_usage', { p_user_id: userId, p_month: month, p_column: 'cover_letters_generated' })
   }
 
   return json(200, { text })

@@ -239,6 +239,14 @@ MAU 1,000명, 유료 전환 10% (100명), 하이브리드 모델
 - [x] 공고에 문항 없을 때 수동 입력/기본 문항 선택 지원
 - [x] GitHub Pages 자동 배포
 
+### 완료 (2026-04-26) — UI/UX + 자소서 워크플로 스프린트 (IMPROVEMENT_PLAN.md)
+- [x] **P1 디자인 토큰 정비** — surface/shadow 토큰, 카테고리 그룹 컬러(학업/실무/도전/대외활동), Card 컴포넌트, lucide-react 아이콘 도입, SVG 별점
+- [x] **P2 자소서 저장 인프라** — `cover_letters` + `cover_letter_answers` 테이블, 회사별 이력 페이지(`/cover-letter`), 작업 자동 저장(디바운스), 새로고침 시 이어서 편집
+- [x] **P3 재생성/톤·강조/블록 수동 매칭** — 톤 4종/강조 3종 select, 다시 생성 버튼, 블록 변경 드롭다운, 답변 버전 누적(`is_active` 플래그), Edge Function 정책 변경(문항당 3회 무료 재생성)
+- [x] **P4 대시보드 정보 위계 개편** — Hero zone(역량 레이더 + 다음 카테고리 추천 + 사용량), Notion 패널(좌 검색·필터·리스트 / 우 풀뷰), 업종 추천 collapsible 강등
+- [x] **P5 랜딩 데모/시각화** — 자동 재생 인터뷰→블록 변환 데모, Before/After 비교 카드, 소셜 프루프(`public_block_count` RPC)
+- [x] **P6 보강** — 인터뷰 중단 버튼(draft 보존), 업종 추천 백그라운드 lazy 재시도, route-level lazy 로드(첫 페인트 787KB → 204KB)
+
 ### 완료 (2026-04-19) — 보안/UX 스프린트
 - [x] **Gemini API 키 서버 이동** — Supabase Edge Function `gemini-proxy` 도입, 클라이언트 번들에서 키 제거
 - [x] **사용량 제한 인프라** — `usage_counters` 테이블 + `increment_usage` RPC (SECURITY DEFINER), 월별 집계

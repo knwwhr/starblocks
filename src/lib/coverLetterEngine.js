@@ -162,9 +162,43 @@ export async function matchBlocksToQuestions(questions, blocks, requirements) {
   }
 }
 
-export async function generateAnswer(question, block, jobInfo) {
+export const TONE_OPTIONS = [
+  { id: 'default',    label: '기본',       hint: '균형 잡힌 톤' },
+  { id: 'confident',  label: '적극적',     hint: '자신감 있고 주도적인 톤' },
+  { id: 'humble',     label: '겸손한',     hint: '낮은 자세로 배움 강조' },
+  { id: 'analytical', label: '데이터 중심',hint: '수치·근거 위주, 객관적 어조' },
+]
+
+export const EMPHASIS_OPTIONS = [
+  { id: 'balanced', label: 'STAR 균형',  hint: '상황·행동·결과·배움을 고르게' },
+  { id: 'result',   label: '결과 강조',  hint: '성과/임팩트를 더 길게' },
+  { id: 'process',  label: '과정 강조',  hint: '판단·시도·고민 과정을 더 길게' },
+]
+
+const TONE_DIRECTIVES = {
+  default: '',
+  confident: '톤은 자신감 있고 주도적으로. 본인이 실제로 결정·행동했다는 점이 분명히 드러나도록.',
+  humble: '톤은 겸손하게. 본인의 한계를 인정하고 배움/협업을 강조. 단, 성과는 사실대로 명확히.',
+  analytical: '톤은 분석적으로. 수치·비교·근거를 앞세우고 감정 표현은 최소화.',
+}
+
+const EMPHASIS_DIRECTIVES = {
+  balanced: 'STAR 4요소(상황·행동·결과·배움)를 비교적 고르게 배분.',
+  result: '결과/성과/임팩트 부분을 전체의 40% 이상 할애. 수치와 변화를 구체적으로.',
+  process: '판단 과정·시도·고민을 전체의 40% 이상 할애. 결과는 간결하게.',
+}
+
+export async function generateAnswer(question, block, jobInfo, options = {}) {
+  const tone = options.tone && TONE_DIRECTIVES[options.tone] ? options.tone : 'default'
+  const emphasis = options.emphasis && EMPHASIS_DIRECTIVES[options.emphasis] ? options.emphasis : 'balanced'
+
+  const directives = [TONE_DIRECTIVES[tone], EMPHASIS_DIRECTIVES[emphasis]].filter(Boolean).join('\n')
+  const systemPrompt = directives
+    ? `${GENERATE_ANSWER_PROMPT}\n\n## 추가 지시\n${directives}`
+    : GENERATE_ANSWER_PROMPT
+
   const messages = [
-    { role: 'system', content: GENERATE_ANSWER_PROMPT },
+    { role: 'system', content: systemPrompt },
     {
       role: 'user',
       content: JSON.stringify({
@@ -186,13 +220,20 @@ export async function generateAnswer(question, block, jobInfo) {
       })
     }
   ]
-  const response = await sendMessage(messages, { action: 'answer_gen', maxOutputTokens: 2048, temperature: 0.7 })
+  const response = await sendMessage(messages, {
+    action: 'answer_gen',
+    maxOutputTokens: 2048,
+    temperature: 0.7,
+    coverLetterId: options.coverLetterId,
+    questionIndex: options.questionIndex,
+  })
   const parsed = extractJson(response)
   if (!parsed) throw new Error('자소서 생성 결과를 해석하지 못했습니다.')
   return {
     answer: parsed.answer || '',
     charCount: parsed.charCount || (parsed.answer?.length ?? 0),
     usedKeywords: Array.isArray(parsed.usedKeywords) ? parsed.usedKeywords : [],
+    generationOptions: { tone, emphasis },
   }
 }
 

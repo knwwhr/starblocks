@@ -1,11 +1,19 @@
-import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../config/supabase'
 import { CATEGORIES } from '../config/categories'
-import { parseJobPosting, matchBlocksToQuestions, generateAnswer, DEFAULT_QUESTIONS } from '../lib/coverLetterEngine'
+import { parseJobPosting, matchBlocksToQuestions, generateAnswer, DEFAULT_QUESTIONS, TONE_OPTIONS, EMPHASIS_OPTIONS } from '../lib/coverLetterEngine'
 import { UsageLimitError } from '../lib/aiClient'
 import { useToast } from '../contexts/ToastContext'
+import {
+  createCoverLetter,
+  updateCoverLetter,
+  getCoverLetter,
+  listAnswers,
+  updateActiveAnswer,
+  insertAnswerVersion,
+} from '../lib/coverLetterStore'
 
 function JobPostingInput({ onAnalyze, loading, error }) {
   const [rawText, setRawText] = useState('')
@@ -165,8 +173,10 @@ function ManualQuestionsInput({ jobInfo, onUseDefault, onUseCustom, onBack, load
   )
 }
 
-function QuestionCard({ index, question, match, block, answer, generating, onGenerate, onEditAnswer }) {
+function QuestionCard({ index, question, match, block, allBlocks, answer, generating, onGenerate, onEditAnswer, onChangeBlock }) {
   const [editing, setEditing] = useState(false)
+  const [tone, setTone] = useState(answer?.generationOptions?.tone || 'default')
+  const [emphasis, setEmphasis] = useState(answer?.generationOptions?.emphasis || 'balanced')
   const cat = block ? CATEGORIES.find(c => c.id === block.category) : null
   const charLimit = question.charLimit || 500
 
@@ -184,27 +194,74 @@ function QuestionCard({ index, question, match, block, answer, generating, onGen
       </div>
 
       <div className="p-5">
-        {/* 매칭된 블록 */}
-        {block ? (
-          <div className="mb-4">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs text-slate-400">사용 블록</span>
+        {/* 매칭된 블록 + 변경 드롭다운 */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="text-xs text-slate-400">사용 블록</span>
+            <select
+              value={block?.id || ''}
+              onChange={(e) => onChangeBlock(index, e.target.value || null)}
+              className="text-xs border border-slate-200 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 max-w-[60%]"
+            >
+              <option value="">— 블록 선택 안 함 —</option>
+              {allBlocks.map(b => {
+                const bcat = CATEGORIES.find(c => c.id === b.category)
+                return (
+                  <option key={b.id} value={b.id}>
+                    {bcat?.emoji} {b.title}
+                  </option>
+                )
+              })}
+            </select>
+          </div>
+          {block ? (
+            <div className="flex items-center gap-2">
               <span className="text-sm">{cat?.emoji}</span>
               <span className="text-xs font-medium text-slate-700">{block.title}</span>
+              {match?.reason && !answer && (
+                <span className="text-xs text-slate-400 truncate">· {match.reason}</span>
+              )}
             </div>
-            {match?.reason && (
-              <p className="text-xs text-slate-400">{match.reason}</p>
-            )}
-          </div>
-        ) : (
-          <div className="mb-4 bg-amber-50 rounded-lg p-3 border border-amber-100">
-            <p className="text-sm text-amber-700 mb-2">매칭 가능한 블록이 없습니다</p>
-            <Link
-              to="/interview"
-              className="text-xs text-primary-600 font-medium hover:text-primary-700 no-underline"
-            >
-              이 문항에 쓸 블록 만들러 가기 &rarr;
-            </Link>
+          ) : (
+            <div className="bg-amber-50 rounded-lg p-3 border border-amber-100 mt-1">
+              <p className="text-sm text-amber-700 mb-2">사용할 블록이 선택되지 않았습니다</p>
+              <Link
+                to="/interview"
+                className="text-xs text-primary-600 font-medium hover:text-primary-700 no-underline"
+              >
+                이 문항에 쓸 블록 만들러 가기 &rarr;
+              </Link>
+            </div>
+          )}
+        </div>
+
+        {/* 톤/강조 옵션 — 블록 있을 때만 */}
+        {block && (
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="text-xs text-slate-400 block mb-1">톤</span>
+              <select
+                value={tone}
+                onChange={(e) => setTone(e.target.value)}
+                className="w-full text-xs border border-slate-200 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                {TONE_OPTIONS.map(o => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-400 block mb-1">강조</span>
+              <select
+                value={emphasis}
+                onChange={(e) => setEmphasis(e.target.value)}
+                className="w-full text-xs border border-slate-200 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                {EMPHASIS_OPTIONS.map(o => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </label>
           </div>
         )}
 
@@ -213,12 +270,23 @@ function QuestionCard({ index, question, match, block, answer, generating, onGen
           <div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-bold text-slate-400">자소서 답변</span>
-              <button
-                onClick={() => setEditing(!editing)}
-                className="text-xs text-primary-600 hover:text-primary-700 font-medium"
-              >
-                {editing ? '미리보기' : '수정하기'}
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setEditing(!editing)}
+                  className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+                >
+                  {editing ? '미리보기' : '수정하기'}
+                </button>
+                {block && (
+                  <button
+                    onClick={() => onGenerate(index, { tone, emphasis })}
+                    disabled={generating}
+                    className="text-xs text-slate-500 hover:text-slate-800 font-medium disabled:opacity-40"
+                  >
+                    {generating ? '재생성 중...' : '다시 생성'}
+                  </button>
+                )}
+              </div>
             </div>
             {editing ? (
               <textarea
@@ -243,7 +311,7 @@ function QuestionCard({ index, question, match, block, answer, generating, onGen
           </div>
         ) : block ? (
           <button
-            onClick={() => onGenerate(index)}
+            onClick={() => onGenerate(index, { tone, emphasis })}
             disabled={generating}
             className="w-full py-2.5 bg-primary-50 text-primary-600 rounded-lg text-sm font-medium hover:bg-primary-100 disabled:opacity-40 flex items-center justify-center gap-2"
           >
@@ -262,11 +330,42 @@ function QuestionCard({ index, question, match, block, answer, generating, onGen
   )
 }
 
-function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset }) {
-  const [answers, setAnswers] = useState({})
+function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult, blocks, onReset, coverLetterId, initialAnswers = {} }) {
+  const [answers, setAnswers] = useState(initialAnswers)
+  const [matchResult, setMatchResult] = useState(initialMatchResult)
   const [generatingIndex, setGeneratingIndex] = useState(null)
   const [generatingAll, setGeneratingAll] = useState(false)
   const toast = useToast()
+  const saveTimers = useRef({})
+
+  // 인라인 편집 자동 저장 (디바운스, 활성 행 in-place 갱신)
+  const persistAnswer = (questionIndex, payload) => {
+    if (!coverLetterId) return
+    clearTimeout(saveTimers.current[questionIndex])
+    saveTimers.current[questionIndex] = setTimeout(() => {
+      updateActiveAnswer(coverLetterId, questionIndex, payload).catch(err => {
+        console.error('Save answer failed:', err)
+      })
+    }, 600)
+  }
+
+  // 블록 매칭 변경 — matchResult patch + DB 동기화
+  const handleChangeBlock = async (questionIndex, newBlockId) => {
+    setMatchResult(prev => {
+      const matches = Array.isArray(prev?.matches) ? [...prev.matches] : []
+      const existingIdx = matches.findIndex(m => m.questionIndex === questionIndex)
+      const next = { questionIndex, blockId: newBlockId, reason: '수동 선택' }
+      if (existingIdx >= 0) matches[existingIdx] = { ...matches[existingIdx], ...next }
+      else matches.push(next)
+      const updated = { ...(prev || { overallFit: 0, missingAreas: [] }), matches }
+      if (coverLetterId) {
+        updateCoverLetter(coverLetterId, { matchResult: updated }).catch(err =>
+          console.error('Match save failed:', err)
+        )
+      }
+      return updated
+    })
+  }
 
   const getMatchedBlock = (questionIndex) => {
     const match = matchResult.matches?.find(m => m.questionIndex === questionIndex)
@@ -278,14 +377,32 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
     return matchResult.matches?.find(m => m.questionIndex === questionIndex)
   }
 
-  const handleGenerate = async (questionIndex) => {
+  const handleGenerate = async (questionIndex, options = {}) => {
     const block = getMatchedBlock(questionIndex)
     if (!block) return
 
     setGeneratingIndex(questionIndex)
     try {
-      const result = await generateAnswer(questions[questionIndex], block, jobInfo)
+      const result = await generateAnswer(questions[questionIndex], block, jobInfo, {
+        ...options,
+        coverLetterId,
+        questionIndex,
+      })
       setAnswers(prev => ({ ...prev, [questionIndex]: result }))
+      // 생성/재생성은 버전 누적 (이전 답변은 inactive로 보존)
+      if (coverLetterId) {
+        try {
+          await insertAnswerVersion(coverLetterId, questionIndex, {
+            blockId: block.id,
+            answer: result.answer,
+            usedKeywords: result.usedKeywords,
+            charCount: result.charCount,
+            generationOptions: result.generationOptions,
+          })
+        } catch (e) {
+          console.error('Version save failed:', e)
+        }
+      }
     } catch (err) {
       console.error('Generate error:', err)
       if (err instanceof UsageLimitError) {
@@ -305,7 +422,7 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
       .filter(({ i, block }) => block && !answers[i])
 
     const results = await Promise.allSettled(
-      tasks.map(({ q, block }) => generateAnswer(q, block, jobInfo))
+      tasks.map(({ q, i, block }) => generateAnswer(q, block, jobInfo, { coverLetterId, questionIndex: i }))
     )
 
     let limitHit = false
@@ -314,7 +431,17 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
       const next = { ...prev }
       results.forEach((r, idx) => {
         if (r.status === 'fulfilled') {
-          next[tasks[idx].i] = r.value
+          const qi = tasks[idx].i
+          next[qi] = r.value
+          if (coverLetterId) {
+            insertAnswerVersion(coverLetterId, qi, {
+              blockId: tasks[idx].block.id,
+              answer: r.value.answer,
+              usedKeywords: r.value.usedKeywords,
+              charCount: r.value.charCount,
+              generationOptions: r.value.generationOptions,
+            }).catch(e => console.error('Version save failed:', e))
+          }
         } else {
           if (r.reason instanceof UsageLimitError) limitHit = r.reason
           else failures++
@@ -330,6 +457,13 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
 
   const handleEditAnswer = (index, newAnswer) => {
     setAnswers(prev => ({ ...prev, [index]: newAnswer }))
+    const block = getMatchedBlock(index)
+    persistAnswer(index, {
+      blockId: block?.id,
+      answer: newAnswer.answer,
+      usedKeywords: newAnswer.usedKeywords,
+      charCount: newAnswer.charCount,
+    })
   }
 
   const handleCopyAll = () => {
@@ -348,7 +482,7 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
     <div className="max-w-2xl mx-auto px-4 py-8 animate-fade-in">
       {/* 헤더 */}
       <div className="mb-6">
-        <button onClick={onReset} className="text-xs text-slate-400 hover:text-slate-600 mb-3 block">&larr; 다른 공고로 쓰기</button>
+        <button onClick={onReset} className="text-xs text-slate-400 hover:text-slate-600 mb-3 block">&larr; 이력으로 돌아가기</button>
         <h1 className="text-xl font-bold text-slate-900">
           {jobInfo.company || '회사'} {jobInfo.position && `- ${jobInfo.position}`}
         </h1>
@@ -426,10 +560,12 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
             question={q}
             match={getMatch(i)}
             block={getMatchedBlock(i)}
+            allBlocks={blocks}
             answer={answers[i]}
             generating={generatingIndex === i}
             onGenerate={handleGenerate}
             onEditAnswer={handleEditAnswer}
+            onChangeBlock={handleChangeBlock}
           />
         ))}
       </div>
@@ -451,18 +587,60 @@ function CoverLetterResult({ jobInfo, questions, matchResult, blocks, onReset })
 
 export default function CoverLetterPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
+  const { id: routeId } = useParams() // /cover-letter/:id 또는 undefined(새)
+  const toast = useToast()
+
   const [blocks, setBlocks] = useState([])
-  const [phase, setPhase] = useState('input') // input | result
+  const [phase, setPhase] = useState(routeId ? 'loading' : 'input') // loading | input | manual | result
   const [analyzing, setAnalyzing] = useState(false)
   const [jobInfo, setJobInfo] = useState(null)
+  const [jobPostingRaw, setJobPostingRaw] = useState('')
   const [questions, setQuestions] = useState([])
   const [matchResult, setMatchResult] = useState(null)
   const [analyzeError, setAnalyzeError] = useState(null)
-  const [needsManualQuestions, setNeedsManualQuestions] = useState(false)
+  const [coverLetterId, setCoverLetterId] = useState(null)
+  const [initialAnswers, setInitialAnswers] = useState({})
 
   useEffect(() => {
     if (user) loadBlocks()
   }, [user])
+
+  // /cover-letter/:id 진입 시 기존 작업물 로드
+  useEffect(() => {
+    if (!routeId || !user) return
+    let cancelled = false
+    Promise.all([getCoverLetter(routeId), listAnswers(routeId)])
+      .then(([letter, answerRows]) => {
+        if (cancelled) return
+        if (letter.user_id !== user.id) {
+          toast.error('접근 권한이 없습니다.')
+          navigate('/cover-letter', { replace: true })
+          return
+        }
+        setCoverLetterId(letter.id)
+        setJobInfo(letter.job_info)
+        setJobPostingRaw(letter.job_posting_raw || '')
+        setQuestions(letter.questions || [])
+        setMatchResult(letter.match_result)
+        const answersByIndex = {}
+        answerRows.forEach(r => {
+          answersByIndex[r.question_index] = {
+            answer: r.answer,
+            usedKeywords: r.used_keywords || [],
+            charCount: r.char_count ?? (r.answer || '').length,
+          }
+        })
+        setInitialAnswers(answersByIndex)
+        setPhase('result')
+      })
+      .catch(err => {
+        console.error(err)
+        toast.error('자소서를 불러오지 못했습니다.')
+        navigate('/cover-letter', { replace: true })
+      })
+    return () => { cancelled = true }
+  }, [routeId, user, navigate, toast])
 
   const loadBlocks = async () => {
     const { data } = await supabase
@@ -477,17 +655,36 @@ export default function CoverLetterPage() {
     if (blocks.length > 0 && questionList.length > 0) {
       try {
         const matches = await matchBlocksToQuestions(questionList, blocks, jobData.requirements)
-        setMatchResult(matches)
+        return matches
       } catch (err) {
         console.error('Match error:', err)
-        setMatchResult({ matches: [], overallFit: 0, missingAreas: ['매칭 실패 — 블록을 수동 선택해주세요'] })
+        return { matches: [], overallFit: 0, missingAreas: ['매칭 실패 — 블록을 수동 선택해주세요'] }
       }
-    } else {
-      setMatchResult({
-        matches: [],
-        overallFit: 0,
-        missingAreas: blocks.length === 0 ? ['경험 블록을 먼저 만들어주세요'] : ['문항을 추가해주세요'],
+    }
+    return {
+      matches: [],
+      overallFit: 0,
+      missingAreas: blocks.length === 0 ? ['경험 블록을 먼저 만들어주세요'] : ['문항을 추가해주세요'],
+    }
+  }
+
+  // result 단계 진입 = DB row 생성 후 /:id로 라우팅 (자동 저장 활성화)
+  const enterResultPhase = async (jobData, questionList, rawText) => {
+    const match = await runMatching(jobData, questionList)
+    try {
+      const created = await createCoverLetter(user.id, {
+        jobInfo: jobData,
+        jobPostingRaw: rawText,
+        questions: questionList,
+        matchResult: match,
       })
+      navigate(`/cover-letter/${created.id}`, { replace: true })
+    } catch (err) {
+      console.error('Create cover letter failed:', err)
+      // DB 저장 실패해도 사용자 경험은 보존 (메모리 모드)
+      setMatchResult(match)
+      setPhase('result')
+      toast.error('이력 저장에 실패했지만 작업은 계속할 수 있어요.')
     }
   }
 
@@ -495,54 +692,52 @@ export default function CoverLetterPage() {
     if (!rawText.trim()) return
     setAnalyzing(true)
     setAnalyzeError(null)
-    setNeedsManualQuestions(false)
+    setJobPostingRaw(rawText)
 
     try {
       const parsed = await parseJobPosting(rawText)
       setJobInfo(parsed)
 
       if (!parsed.questions || parsed.questions.length === 0) {
-        // 공고에 자소서 문항이 없으면 수동 단계로 진입
         setQuestions([])
-        setNeedsManualQuestions(true)
         setPhase('manual')
+        setAnalyzing(false)
       } else {
         setQuestions(parsed.questions)
-        await runMatching(parsed, parsed.questions)
-        setPhase('result')
+        await enterResultPhase(parsed, parsed.questions, rawText)
+        setAnalyzing(false)
       }
     } catch (err) {
       console.error('Analyze error:', err)
       setAnalyzeError(err.message || '공고 분석에 실패했습니다.')
-    } finally {
       setAnalyzing(false)
     }
   }
 
   const handleUseDefaultQuestions = async () => {
-    const qs = DEFAULT_QUESTIONS
-    setQuestions(qs)
     setAnalyzing(true)
-    await runMatching(jobInfo, qs)
+    setQuestions(DEFAULT_QUESTIONS)
+    await enterResultPhase(jobInfo, DEFAULT_QUESTIONS, jobPostingRaw)
     setAnalyzing(false)
-    setPhase('result')
   }
 
   const handleUseCustomQuestions = async (customQs) => {
-    setQuestions(customQs)
     setAnalyzing(true)
-    await runMatching(jobInfo, customQs)
+    setQuestions(customQs)
+    await enterResultPhase(jobInfo, customQs, jobPostingRaw)
     setAnalyzing(false)
-    setPhase('result')
   }
 
   const handleReset = () => {
-    setPhase('input')
-    setJobInfo(null)
-    setQuestions([])
-    setMatchResult(null)
-    setAnalyzeError(null)
-    setNeedsManualQuestions(false)
+    navigate('/cover-letter')
+  }
+
+  if (phase === 'loading') {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-sm text-slate-400">불러오는 중...</div>
+      </div>
+    )
   }
 
   if (phase === 'input') {
@@ -555,7 +750,7 @@ export default function CoverLetterPage() {
         jobInfo={jobInfo}
         onUseDefault={handleUseDefaultQuestions}
         onUseCustom={handleUseCustomQuestions}
-        onBack={handleReset}
+        onBack={() => setPhase('input')}
         loading={analyzing}
       />
     )
@@ -568,6 +763,8 @@ export default function CoverLetterPage() {
       matchResult={matchResult}
       blocks={blocks}
       onReset={handleReset}
+      coverLetterId={coverLetterId}
+      initialAnswers={initialAnswers}
     />
   )
 }
