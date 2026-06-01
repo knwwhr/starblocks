@@ -27,15 +27,26 @@ export async function sendMessage(messages, options = {}) {
   })
 
   if (error) {
-    // supabase-js wraps non-2xx as FunctionsHttpError. Dig into context.
+    // supabase-js wraps non-2xx as FunctionsHttpError with a generic
+    // "Edge Function returned a non-2xx status code" message. The function
+    // itself returns { error: "..." } in the body — dig it out so the real
+    // cause (quota/auth/Gemini error) surfaces instead of the generic text.
     const ctx = error.context
-    if (ctx?.status === 402) {
-      const parsed = await ctx.json?.().catch(() => null)
-      if (parsed?.error === 'limit_reached') {
-        throw new UsageLimitError(parsed.scope, parsed.limit)
-      }
+    const parsed = await ctx?.json?.().catch(() => null)
+    const status = ctx?.status
+
+    if (status === 402 && parsed?.error === 'limit_reached') {
+      throw new UsageLimitError(parsed.scope, parsed.limit)
     }
-    throw new Error(error.message || 'AI 호출에 실패했습니다.')
+
+    // Gemini quota/rate-limit exhaustion comes back as 429 — give a clear
+    // Korean message instead of the raw upstream text.
+    if (status === 429) {
+      throw new Error('AI 사용량이 일시적으로 초과되었습니다. 잠시 후 다시 시도해주세요.')
+    }
+
+    const detail = parsed?.error || error.message || 'AI 호출에 실패했습니다.'
+    throw new Error(status ? `${detail} (status ${status})` : detail)
   }
 
   if (!data?.text) throw new Error('AI 응답이 비어있습니다.')
