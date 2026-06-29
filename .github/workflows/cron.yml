@@ -1,0 +1,22 @@
+name: Daily maintenance
+
+# 매일 03:00 KST(18:00 UTC) — 구독 갱신 + 블록 백필 + Supabase 킵얼라이브.
+# 외부 요청이라 일시정지된 프로젝트도 깨움. 수동 실행도 가능(workflow_dispatch).
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invoke cron-tasks function
+        run: |
+          code=$(curl -s -o /tmp/out -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer ${{ secrets.VITE_SUPABASE_ANON_KEY }}" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            "https://gjhqxlnjdzjlonfmwbvp.supabase.co/functions/v1/cron-tasks")
+          echo "HTTP $code"; cat /tmp/out; echo
+          test "$code" = "200"
