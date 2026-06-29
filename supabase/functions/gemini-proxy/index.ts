@@ -16,15 +16,44 @@ type Action = 'interview' | 'block_gen' | 'job_parse' | 'block_match' | 'answer_
 
 const FREE_LIMITS = {
   blocks_per_month: 3,
-  cover_letters_per_month: 1,
-  free_regens_per_question: 3, // 문항당 N회까지는 cover_letters_per_month 카운터 차감 X
+  free_regens_per_question: 3, // 문항당 다시쓰기 상한 (무료·패스·Pro 공통 — 비용 유계)
 }
+
+// 클라이언트가 보낸 model/토큰을 그대로 믿지 않는다 (비용 어뷰징 차단).
+const ALLOWED_MODELS = new Set(['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'])
+const MAX_OUTPUT_TOKENS_CAP = 4096
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   })
+}
+
+// deno-lint-ignore no-explicit-any
+async function hasActivePro(supabase: any): Promise<boolean> {
+  const { data } = await supabase
+    .from('subscriptions')
+    .select('current_period_end')
+    .eq('status', 'active')
+    .limit(1)
+    .maybeSingle()
+  return !!data && new Date(data.current_period_end) > new Date()
+}
+
+// 공고가 잠금 해제되었나: Pro 구독 또는 이 공고용 마감 패스 보유
+// deno-lint-ignore no-explicit-any
+async function isCoverLetterUnlocked(supabase: any, coverLetterId?: string): Promise<boolean> {
+  if (await hasActivePro(supabase)) return true
+  if (!coverLetterId) return false
+  const { data } = await supabase
+    .from('passes')
+    .select('id')
+    .eq('cover_letter_id', coverLetterId)
+    .eq('status', 'paid')
+    .limit(1)
+    .maybeSingle()
+  return !!data
 }
 
 Deno.serve(async (req) => {
@@ -66,44 +95,50 @@ Deno.serve(async (req) => {
     return json(400, { error: 'action and messages required' })
   }
 
-  // Usage limit enforcement for the two billable actions.
-  // For answer_gen we offer free regenerations per question (P3 policy):
-  //   - First N regenerations of the same question are free (no monthly counter increment)
-  //   - Subsequent regenerations consume the monthly cover_letters quota
-  let chargeMonthlyForAnswer = false
-  if (action === 'block_gen' || action === 'answer_gen') {
-    const month = new Date().toISOString().slice(0, 7) // YYYY-MM
-    const { data: usage } = await supabase
-      .from('usage_counters')
-      .select('blocks_created, cover_letters_generated, plan')
-      .eq('user_id', userId)
-      .eq('month', month)
-      .maybeSingle()
-
-    const plan = usage?.plan ?? 'free'
-
-    if (action === 'block_gen' && plan === 'free') {
+  // ── 블록 생성: 월 무료 한도 (Pro 무제한) ──────────────
+  if (action === 'block_gen') {
+    if (!(await hasActivePro(supabase))) {
+      const month = new Date().toISOString().slice(0, 7) // YYYY-MM
+      const { data: usage } = await supabase
+        .from('usage_counters')
+        .select('blocks_created')
+        .eq('user_id', userId)
+        .eq('month', month)
+        .maybeSingle()
       if ((usage?.blocks_created ?? 0) >= FREE_LIMITS.blocks_per_month) {
         return json(402, { error: 'limit_reached', scope: 'blocks', limit: FREE_LIMITS.blocks_per_month })
       }
     }
+  }
 
-    if (action === 'answer_gen') {
-      let priorVersions = 0
-      if (coverLetterId && typeof questionIndex === 'number') {
-        const { count } = await supabase
-          .from('cover_letter_answers')
-          .select('id', { count: 'exact', head: true })
-          .eq('cover_letter_id', coverLetterId)
-          .eq('question_index', questionIndex)
-        priorVersions = count ?? 0
-      }
-      const isFreeRegen = priorVersions < FREE_LIMITS.free_regens_per_question
-      if (!isFreeRegen) {
-        if (plan === 'free' && (usage?.cover_letters_generated ?? 0) >= FREE_LIMITS.cover_letters_per_month) {
-          return json(402, { error: 'limit_reached', scope: 'cover_letters', limit: FREE_LIMITS.cover_letters_per_month })
-        }
-        chargeMonthlyForAnswer = true
+  // ── 자소서 답변: value-first 게이팅 ───────────────────
+  //   1) 문항당 다시쓰기 상한(3)은 모두에게 적용 — 비용 유계
+  //   2) 잠금 해제(Pro/패스) 전에는 공고당 "첫 문항"만 무료, 나머지는 결제 유도
+  if (action === 'answer_gen') {
+    let priorVersions = 0
+    if (coverLetterId && typeof questionIndex === 'number') {
+      const { count } = await supabase
+        .from('cover_letter_answers')
+        .select('id', { count: 'exact', head: true })
+        .eq('cover_letter_id', coverLetterId)
+        .eq('question_index', questionIndex)
+      priorVersions = count ?? 0
+    }
+
+    if (priorVersions >= FREE_LIMITS.free_regens_per_question) {
+      return json(402, { error: 'limit_reached', scope: 'regen', limit: FREE_LIMITS.free_regens_per_question })
+    }
+
+    // 새 문항(priorVersions === 0)을 시작하려는데 잠금 상태고, 이미 다른 문항을
+    // 한 번이라도 생성했다면 → 결제 유도(locked). 첫 문항은 무료로 보여준다.
+    if (priorVersions === 0 && coverLetterId && !(await isCoverLetterUnlocked(supabase, coverLetterId))) {
+      const { data: rows } = await supabase
+        .from('cover_letter_answers')
+        .select('question_index')
+        .eq('cover_letter_id', coverLetterId)
+      const answeredQuestions = new Set((rows ?? []).map((r: { question_index: number }) => r.question_index)).size
+      if (answeredQuestions >= 1) {
+        return json(402, { error: 'locked', scope: 'cover_letter' })
       }
     }
   }
@@ -116,7 +151,9 @@ Deno.serve(async (req) => {
     parts: [{ text: m.content }],
   }))
 
-  const modelName = model || 'gemini-flash-latest'
+  const modelName = model && ALLOWED_MODELS.has(model) ? model : 'gemini-flash-latest'
+  const safeMaxTokens = Math.min(Math.max(maxOutputTokens ?? 2048, 256), MAX_OUTPUT_TOKENS_CAP)
+  const safeTemp = Math.min(Math.max(temperature ?? 0.8, 0), 1.5)
   const upstream = await fetch(`${GEMINI_URL}/${modelName}:generateContent`, {
     method: 'POST',
     headers: {
@@ -127,8 +164,8 @@ Deno.serve(async (req) => {
       system_instruction: systemMessage ? { parts: [{ text: systemMessage.content }] } : undefined,
       contents,
       generationConfig: {
-        maxOutputTokens: maxOutputTokens ?? 2048,
-        temperature: temperature ?? 0.8,
+        maxOutputTokens: safeMaxTokens,
+        temperature: safeTemp,
       },
     }),
   })
@@ -141,13 +178,11 @@ Deno.serve(async (req) => {
   const data = await upstream.json()
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 
-  // Increment usage counters after successful billable action.
-  if (action === 'block_gen') {
+  // Increment usage counter after a successful free-tier block generation.
+  // (answer_gen 은 더 이상 월 카운터를 쓰지 않는다 — 공고 단위 게이팅으로 대체)
+  if (action === 'block_gen' && !(await hasActivePro(supabase))) {
     const month = new Date().toISOString().slice(0, 7)
     await supabase.rpc('increment_usage', { p_user_id: userId, p_month: month, p_column: 'blocks_created' })
-  } else if (action === 'answer_gen' && chargeMonthlyForAnswer) {
-    const month = new Date().toISOString().slice(0, 7)
-    await supabase.rpc('increment_usage', { p_user_id: userId, p_month: month, p_column: 'cover_letters_generated' })
   }
 
   return json(200, { text })

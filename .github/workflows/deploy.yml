@@ -34,6 +34,9 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # 결제 — 토스 키 발급 전까지는 repo variable VITE_PAYMENTS_MOCK=true 로 목 모드 테스트
+          VITE_PAYMENTS_MOCK: ${{ vars.VITE_PAYMENTS_MOCK }}
+          VITE_TOSS_CLIENT_KEY: ${{ secrets.VITE_TOSS_CLIENT_KEY }}
 
       - uses: actions/configure-pages@v4
 

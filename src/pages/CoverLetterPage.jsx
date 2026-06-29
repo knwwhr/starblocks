@@ -6,6 +6,9 @@ import { CATEGORIES } from '../config/categories'
 import { parseJobPosting, matchBlocksToQuestions, generateAnswer, DEFAULT_QUESTIONS, TONE_OPTIONS, EMPHASIS_OPTIONS } from '../lib/coverLetterEngine'
 import { UsageLimitError } from '../lib/aiClient'
 import { useToast } from '../contexts/ToastContext'
+import { fetchEntitlements } from '../lib/entitlements'
+import { startPassPayment, startProSubscription } from '../lib/payments'
+import UpgradeSheet from '../components/UpgradeSheet'
 import {
   createCoverLetter,
   updateCoverLetter,
@@ -331,12 +334,50 @@ function QuestionCard({ index, question, match, block, allBlocks, answer, genera
 }
 
 function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult, blocks, onReset, coverLetterId, initialAnswers = {} }) {
+  const { user } = useAuth()
   const [answers, setAnswers] = useState(initialAnswers)
   const [matchResult, setMatchResult] = useState(initialMatchResult)
   const [generatingIndex, setGeneratingIndex] = useState(null)
   const [generatingAll, setGeneratingAll] = useState(false)
+  const [entitlements, setEntitlements] = useState({ pro: false, passUnlocked: false })
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  const [payingMethod, setPayingMethod] = useState(false)
   const toast = useToast()
   const saveTimers = useRef({})
+
+  const unlocked = entitlements.pro || entitlements.passUnlocked
+
+  // 권한(Pro/패스) 로드 — 잠금 해제 여부로 UI 분기
+  useEffect(() => {
+    let cancelled = false
+    fetchEntitlements(coverLetterId)
+      .then((ent) => { if (!cancelled) setEntitlements(ent) })
+      .catch((err) => console.error('Entitlements load failed:', err))
+    return () => { cancelled = true }
+  }, [coverLetterId])
+
+  const handleBuyPass = async () => {
+    setPayingMethod(true)
+    try {
+      await startPassPayment({ userId: user.id, coverLetterId })
+      // 성공 시 토스 결제창으로 리다이렉트됨 (복귀는 PaymentCallback)
+    } catch (err) {
+      console.error('Pass payment failed:', err)
+      toast.error(err.message || '결제창을 열지 못했어요.')
+      setPayingMethod(false)
+    }
+  }
+
+  const handleSubscribe = async () => {
+    setPayingMethod(true)
+    try {
+      await startProSubscription({ userId: user.id })
+    } catch (err) {
+      console.error('Subscription failed:', err)
+      toast.error(err.message || '결제창을 열지 못했어요.')
+      setPayingMethod(false)
+    }
+  }
 
   // 인라인 편집 자동 저장 (디바운스, 활성 행 in-place 갱신)
   const persistAnswer = (questionIndex, payload) => {
@@ -406,7 +447,9 @@ function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult
     } catch (err) {
       console.error('Generate error:', err)
       if (err instanceof UsageLimitError) {
-        toast.error(err.message)
+        // 잠긴 공고(첫 문항 이후) → 결제 유도 시트. 그 외 한도는 토스트.
+        if (err.scope === 'cover_letter') setUpgradeOpen(true)
+        else toast.error(err.message)
       } else {
         toast.error('자소서 생성에 실패했습니다. 잠시 후 다시 시도해주세요.')
       }
@@ -533,8 +576,15 @@ function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult
         )}
       </div>
 
-      {/* 전체 생성 버튼 */}
-      {matchableCount > 0 && answeredCount < matchableCount && (
+      {/* 잠금 해제 배지 */}
+      {unlocked && (
+        <div className="mb-4 flex items-center gap-2 text-xs font-medium text-primary-600">
+          <span>{entitlements.pro ? '✦ Pro · 모든 공고 무제한' : '🎫 마감 패스 · 이 공고 잠금 해제됨'}</span>
+        </div>
+      )}
+
+      {/* 전체 생성 버튼 — 잠금 해제됐거나 문항 1개일 때만 (게이팅 우회 방지) */}
+      {matchableCount > 0 && answeredCount < matchableCount && (unlocked || matchableCount <= 1) && (
         <button
           onClick={handleGenerateAll}
           disabled={generatingAll}
@@ -548,6 +598,16 @@ function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult
           ) : (
             `전체 문항 한번에 생성하기 (${matchableCount}문항)`
           )}
+        </button>
+      )}
+
+      {/* 잠금 안내 — 첫 문항 완성 후 나머지는 결제 유도 */}
+      {!unlocked && matchableCount > 1 && answeredCount >= 1 && answeredCount < matchableCount && (
+        <button
+          onClick={() => setUpgradeOpen(true)}
+          className="w-full py-3 mb-4 bg-primary-50 text-primary-700 rounded-xl text-sm font-medium hover:bg-primary-100"
+        >
+          나머지 {matchableCount - answeredCount}개 문항도 완성하기 →
         </button>
       )}
 
@@ -581,6 +641,14 @@ function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult
           </button>
         </div>
       )}
+
+      <UpgradeSheet
+        open={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        onBuyPass={handleBuyPass}
+        onSubscribe={handleSubscribe}
+        loading={payingMethod}
+      />
     </div>
   )
 }

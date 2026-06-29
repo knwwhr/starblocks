@@ -13,6 +13,7 @@ const BlockResultPage = lazy(() => import('./pages/BlockResultPage'))
 const CoverLetterPage = lazy(() => import('./pages/CoverLetterPage'))
 const CoverLetterListPage = lazy(() => import('./pages/CoverLetterListPage'))
 const BlockEditPage = lazy(() => import('./pages/BlockEditPage'))
+const PaymentCallback = lazy(() => import('./pages/PaymentCallback'))
 
 const LazyFallback = () => (
   <div className="flex items-center justify-center h-64 text-sm text-slate-400">
@@ -89,6 +90,22 @@ function AppRoutes() {
           element={
             <ProtectedRoute>
               <BlockEditPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/payment/success"
+          element={
+            <ProtectedRoute>
+              <PaymentCallback />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/payment/fail"
+          element={
+            <ProtectedRoute>
+              <PaymentCallback />
             </ProtectedRoute>
           }
         />
