@@ -100,7 +100,7 @@ function ChatInterface({ session, onComplete, onAbort }) {
         turnCount,
         savedAt: Date.now(),
       }))
-    } catch {}
+    } catch { /* localStorage 접근 실패 무시 */ }
   }, [messages, turnCount, session.category, generatedBlock])
 
   // 별도 API 호출로 블록 생성 (대화 컨텍스트 → 구조화된 JSON)
@@ -328,7 +328,7 @@ export default function InterviewPage() {
       if (parsed?.category && Array.isArray(parsed.messages) && parsed.messages.length > 0) {
         setDraft(parsed)
       }
-    } catch {}
+    } catch { /* draft 파싱 실패 무시 */ }
   }, [])
 
   const handleCategorySelect = (categoryId) => {
@@ -406,7 +406,7 @@ export default function InterviewPage() {
         })
 
       // 저장 성공 시 draft 제거
-      try { localStorage.removeItem(DRAFT_KEY) } catch {}
+      try { localStorage.removeItem(DRAFT_KEY) } catch { /* localStorage 접근 실패 무시 */ }
 
       navigate('/block-result', { state: { block: { ...savedBlock, category } } })
     } catch (err) {
@@ -431,7 +431,7 @@ export default function InterviewPage() {
           setDraft(parsed)
         }
       }
-    } catch {}
+    } catch { /* draft 재동기화 실패 무시 */ }
   }
 
   if (!session) {

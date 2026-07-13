@@ -50,6 +50,7 @@ export async function updateCoverLetter(id, patch) {
   if (patch.questions !== undefined) dbPatch.questions = patch.questions
   if (patch.matchResult !== undefined) dbPatch.match_result = patch.matchResult
   if (patch.status !== undefined) dbPatch.status = patch.status
+  if (patch.interviewQuestions !== undefined) dbPatch.interview_questions = patch.interviewQuestions
 
   const { data, error } = await supabase
     .from('cover_letters')

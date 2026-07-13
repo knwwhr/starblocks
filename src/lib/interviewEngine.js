@@ -113,26 +113,26 @@ export function parseBlockFromResponse(text) {
   // 1. <block_json> 태그
   const taggedMatch = text.match(/<block_json>\s*([\s\S]*?)\s*<\/block_json>/)
   if (taggedMatch) {
-    try { return JSON.parse(taggedMatch[1]) } catch {}
+    try { return JSON.parse(taggedMatch[1]) } catch { /* 다음 방법으로 폴백 */ }
   }
 
   // 2. ```json ... ``` 코드 펜스
   const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
   if (fencedMatch) {
-    try { return JSON.parse(fencedMatch[1]) } catch {}
+    try { return JSON.parse(fencedMatch[1]) } catch { /* 다음 방법으로 폴백 */ }
   }
 
   // 3. 중괄호로 감싸인 JSON 본문 직접 추출
   const braceMatch = text.match(/\{[\s\S]*"title"[\s\S]*"situation"[\s\S]*"action"[\s\S]*\}/)
   if (braceMatch) {
-    try { return JSON.parse(braceMatch[0]) } catch {}
+    try { return JSON.parse(braceMatch[0]) } catch { /* 다음 방법으로 폴백 */ }
   }
 
   // 4. 전체 텍스트가 JSON인 경우
   try {
     const parsed = JSON.parse(text.trim())
     if (parsed.title && parsed.situation) return parsed
-  } catch {}
+  } catch { /* 파싱 불가 */ }
 
   return null
 }

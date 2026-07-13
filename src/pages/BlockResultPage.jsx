@@ -18,14 +18,6 @@ export default function BlockResultPage() {
     : null
   const loadingRec = false
 
-  useEffect(() => {
-    if (!savedBlock) {
-      navigate('/dashboard')
-      return
-    }
-    loadBlocks()
-  }, [])
-
   const loadBlocks = async () => {
     const { data } = await supabase
       .from('experience_blocks')
@@ -33,6 +25,15 @@ export default function BlockResultPage() {
       .eq('user_id', user.id)
     setAllBlocks(data || [])
   }
+
+  useEffect(() => {
+    if (!savedBlock) {
+      navigate('/dashboard')
+      return
+    }
+    loadBlocks()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (!savedBlock) return null
 

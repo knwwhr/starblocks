@@ -13,6 +13,10 @@ const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 const PRO_MONTHLY = 9900
 const BACKFILL_LIMIT = 10 // 1회 실행당 AI 백필 상한
 
+// 워크넷 채용정보 채용목록 API (공공, authKey 필요 — 워크넷 OpenAPI 등록).
+const WORKNET_LIST_URL = 'https://openapi.work.go.kr/opi/opi/opinet/getWantedList.do'
+const JOB_INGEST_DISPLAY = 100 // 1회 실행당 인제스트 건수
+
 const RECOMMEND_INDUSTRIES_PROMPT = `당신은 커리어 컨설턴트입니다.
 경험 블록의 내용을 보고, 이 경험이 특히 어필될 수 있는 업종과 직무를 추천하세요.
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 금지.
@@ -61,6 +65,78 @@ async function recommendIndustries(apiKey: string, block: any) {
   }
 }
 
+// ── 워크넷 채용목록 인제스트 헬퍼 ──────────────────────────
+// getWantedList 는 평면 <wanted> 반복 XML. 아래 태그명은 워크넷 개발명세서 표준 필드 기준.
+// ⚠️ 스펙 개정 시 이 매핑만 조정하면 됨 (raw 에 원본 블록을 보존).
+function tagText(block: string, tag: string): string {
+  const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))
+  return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim() : ''
+}
+
+function parseWorknetDate(s: string): string | null {
+  if (!s) return null
+  const digits = s.replace(/\D/g, '')
+  if (digits.length !== 8) return null // '채용시까지' 등 비정형은 무시
+  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`
+}
+
+function deriveKeywords(...texts: string[]): string[] {
+  const set = new Set<string>()
+  for (const t of texts) {
+    if (!t) continue
+    for (const tok of t.split(/[\s,·/()\[\]{}<>|]+/)) {
+      const w = tok.replace(/[^0-9A-Za-z가-힣]/g, '')
+      if (w.length >= 2) set.add(w)
+    }
+  }
+  return Array.from(set).slice(0, 12)
+}
+
+// deno-lint-ignore no-explicit-any
+async function ingestWorknet(admin: any, authKey: string) {
+  const url = `${WORKNET_LIST_URL}?authKey=${encodeURIComponent(authKey)}&callTp=L&returnType=XML&startPage=1&display=${JOB_INGEST_DISPLAY}`
+  const res = await fetch(url)
+  if (!res.ok) return { upserted: 0, error: `worknet ${res.status}` }
+  const xml = await res.text()
+  const blocks = xml.match(/<wanted>[\s\S]*?<\/wanted>/g) ?? []
+  let upserted = 0
+  for (const b of blocks) {
+    const sourceId = tagText(b, 'wantedAuthNo')
+    if (!sourceId) continue
+    const title = tagText(b, 'title')
+    const company = tagText(b, 'company')
+    const region = tagText(b, 'region')
+    const position = tagText(b, 'jobsNm') || title // 직종명 없으면 제목으로 대체
+    const infoUrl = tagText(b, 'wantedInfoUrl')
+    const empType = tagText(b, 'empTpNm') || tagText(b, 'holidayTpNm')
+    const jobCode = tagText(b, 'jobsCd')
+    const closeAt = parseWorknetDate(tagText(b, 'closeDt'))
+    const postedAt = parseWorknetDate(tagText(b, 'regDt'))
+    const description = [company, position, region, empType].filter(Boolean).join(' · ')
+    const { error } = await admin.from('job_postings').upsert(
+      {
+        source: 'worknet',
+        source_id: sourceId,
+        company,
+        title,
+        position,
+        region,
+        employment_type: empType,
+        description,
+        url: infoUrl,
+        keywords: deriveKeywords(title, position),
+        job_code: jobCode,
+        posted_at: postedAt,
+        close_at: closeAt,
+        raw: { xml: b },
+      },
+      { onConflict: 'source,source_id' },
+    )
+    if (!error) upserted++
+  }
+  return { upserted }
+}
+
 Deno.serve(async (req) => {
   // 공유 시크릿 인증 (외부 스케줄러만 호출 가능)
   const secret = Deno.env.get('CRON_SECRET')
@@ -71,7 +147,7 @@ Deno.serve(async (req) => {
   }
 
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-  const summary = { renewed: 0, pastDue: 0, backfilled: 0, errors: [] as string[] }
+  const summary = { renewed: 0, pastDue: 0, backfilled: 0, jobsUpserted: 0, errors: [] as string[] }
 
   // ── 1) 구독 갱신 ──────────────────────────────────────
   try {
@@ -131,6 +207,19 @@ Deno.serve(async (req) => {
     }
   } catch (e) {
     summary.errors.push('backfill: ' + ((e as Error)?.message ?? String(e)))
+  }
+
+  // ── 3) 채용공고 인제스트 (워크넷) ─────────────────────────
+  //   WORKNET_API_KEY 시크릿이 있을 때만 동작 (미설정 시 조용히 스킵).
+  try {
+    const authKey = Deno.env.get('WORKNET_API_KEY')
+    if (authKey) {
+      const r = await ingestWorknet(admin, authKey)
+      summary.jobsUpserted = r.upserted
+      if (r.error) summary.errors.push('jobs: ' + r.error)
+    }
+  } catch (e) {
+    summary.errors.push('jobs: ' + ((e as Error)?.message ?? String(e)))
   }
 
   return new Response(JSON.stringify({ ok: true, ...summary }), {

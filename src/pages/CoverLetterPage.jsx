@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../config/supabase'
 import { CATEGORIES } from '../config/categories'
-import { parseJobPosting, matchBlocksToQuestions, generateAnswer, DEFAULT_QUESTIONS, TONE_OPTIONS, EMPHASIS_OPTIONS } from '../lib/coverLetterEngine'
+import { parseJobPosting, matchBlocksToQuestions, generateAnswer, generateInterviewQuestions, DEFAULT_QUESTIONS, TONE_OPTIONS, EMPHASIS_OPTIONS } from '../lib/coverLetterEngine'
 import { UsageLimitError } from '../lib/aiClient'
 import { useToast } from '../contexts/ToastContext'
 import { fetchEntitlements } from '../lib/entitlements'
@@ -280,6 +280,15 @@ function QuestionCard({ index, question, match, block, allBlocks, answer, genera
                 >
                   {editing ? '미리보기' : '수정하기'}
                 </button>
+                {block && answer.charCount > charLimit && (
+                  <button
+                    onClick={() => onGenerate(index, { tone, emphasis, condense: true })}
+                    disabled={generating}
+                    className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-40"
+                  >
+                    {generating ? '줄이는 중...' : '줄여서 다시 생성'}
+                  </button>
+                )}
                 {block && (
                   <button
                     onClick={() => onGenerate(index, { tone, emphasis })}
@@ -333,12 +342,14 @@ function QuestionCard({ index, question, match, block, allBlocks, answer, genera
   )
 }
 
-function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult, blocks, onReset, coverLetterId, initialAnswers = {} }) {
+function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult, blocks, onReset, coverLetterId, initialAnswers = {}, initialInterviewQuestions = null }) {
   const { user } = useAuth()
   const [answers, setAnswers] = useState(initialAnswers)
   const [matchResult, setMatchResult] = useState(initialMatchResult)
   const [generatingIndex, setGeneratingIndex] = useState(null)
   const [generatingAll, setGeneratingAll] = useState(false)
+  const [interviewQuestions, setInterviewQuestions] = useState(initialInterviewQuestions)
+  const [generatingIQ, setGeneratingIQ] = useState(false)
   const [entitlements, setEntitlements] = useState({ pro: false, passUnlocked: false })
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [payingMethod, setPayingMethod] = useState(false)
@@ -518,6 +529,36 @@ function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult
     toast.success('자소서 전체가 클립보드에 복사되었습니다.')
   }
 
+  // 예상 면접질문 생성 — 완성 답변(JD+본인 경험) 기반. 잠금 해제(Pro/패스) 공고 전용.
+  const handleGenerateInterviewQuestions = async () => {
+    const answered = questions
+      .map((q, i) => ({ question: q.text, answer: answers[i]?.answer }))
+      .filter(a => a.answer)
+    if (answered.length === 0) {
+      toast.error('먼저 자소서 답변을 생성해주세요.')
+      return
+    }
+    setGeneratingIQ(true)
+    try {
+      const result = await generateInterviewQuestions(jobInfo, answered, coverLetterId)
+      setInterviewQuestions(result)
+      if (coverLetterId) {
+        updateCoverLetter(coverLetterId, { interviewQuestions: result }).catch(e =>
+          console.error('Interview questions save failed:', e))
+      }
+    } catch (err) {
+      console.error('Interview questions error:', err)
+      if (err instanceof UsageLimitError) {
+        if (err.scope === 'cover_letter') setUpgradeOpen(true)
+        else toast.error(err.message)
+      } else {
+        toast.error('면접질문 생성에 실패했습니다. 잠시 후 다시 시도해주세요.')
+      }
+    } finally {
+      setGeneratingIQ(false)
+    }
+  }
+
   const answeredCount = Object.keys(answers).length
   const matchableCount = matchResult.matches?.filter(m => m.blockId).length || 0
 
@@ -630,6 +671,60 @@ function CoverLetterResult({ jobInfo, questions, matchResult: initialMatchResult
         ))}
       </div>
 
+      {/* 예상 면접질문 — 자소서를 쓴 뒤 자연스러운 다음 단계 (면접 준비 리텐션) */}
+      {answeredCount > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 mb-8">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-bold text-slate-900">예상 면접질문</h3>
+            {interviewQuestions?.items?.length > 0 && unlocked && (
+              <button
+                onClick={handleGenerateInterviewQuestions}
+                disabled={generatingIQ}
+                className="text-xs text-slate-500 hover:text-slate-800 font-medium disabled:opacity-40"
+              >
+                {generatingIQ ? '생성 중...' : '다시 생성'}
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-slate-400 mb-4">이 공고에 낸 자소서를 근거로 실제 나올 법한 질문을 뽑아드려요.</p>
+
+          {!unlocked ? (
+            // 잠금: 구독/패스 유도 (구독 가치 심화)
+            <button
+              onClick={() => setUpgradeOpen(true)}
+              className="w-full py-3 bg-primary-50 text-primary-700 rounded-lg text-sm font-medium hover:bg-primary-100"
+            >
+              🔒 Pro·마감 패스로 예상 면접질문까지 준비하기 →
+            </button>
+          ) : interviewQuestions?.items?.length > 0 ? (
+            <ol className="space-y-3">
+              {interviewQuestions.items.map((it, i) => (
+                <li key={i} className="border border-slate-100 rounded-lg p-3">
+                  <p className="text-sm font-medium text-slate-800">Q{i + 1}. {it.question}</p>
+                  {it.intent && <p className="text-xs text-slate-400 mt-1.5">🎯 의도: {it.intent}</p>}
+                  {it.hint && <p className="text-xs text-primary-600 mt-1">💡 답변 방향: {it.hint}</p>}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <button
+              onClick={handleGenerateInterviewQuestions}
+              disabled={generatingIQ}
+              className="w-full py-3 bg-primary-50 text-primary-600 rounded-lg text-sm font-medium hover:bg-primary-100 disabled:opacity-40 flex items-center justify-center gap-2"
+            >
+              {generatingIQ ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" />
+                  질문 뽑는 중...
+                </>
+              ) : (
+                '예상 면접질문 생성하기'
+              )}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 하단 액션 */}
       {answeredCount > 0 && (
         <div className="sticky bottom-4">
@@ -658,9 +753,13 @@ export default function CoverLetterPage() {
   const navigate = useNavigate()
   const { id: routeId } = useParams() // /cover-letter/:id 또는 undefined(새)
   const toast = useToast()
+  const location = useLocation()
+  const prefillPosting = location.state?.posting // 대시보드 추천 공고에서 진입 시
 
   const [blocks, setBlocks] = useState([])
-  const [phase, setPhase] = useState(routeId ? 'loading' : 'input') // loading | input | manual | result
+  const [blocksLoaded, setBlocksLoaded] = useState(false)
+  // 추천 공고 프리필 진입이면 붙여넣기 화면 대신 로딩 표시
+  const [phase, setPhase] = useState(routeId || prefillPosting ? 'loading' : 'input') // loading | input | manual | result
   const [analyzing, setAnalyzing] = useState(false)
   const [jobInfo, setJobInfo] = useState(null)
   const [jobPostingRaw, setJobPostingRaw] = useState('')
@@ -669,9 +768,21 @@ export default function CoverLetterPage() {
   const [analyzeError, setAnalyzeError] = useState(null)
   const [coverLetterId, setCoverLetterId] = useState(null)
   const [initialAnswers, setInitialAnswers] = useState({})
+  const [initialInterviewQuestions, setInitialInterviewQuestions] = useState(null)
+
+  const loadBlocks = async () => {
+    const { data } = await supabase
+      .from('experience_blocks')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+    setBlocks(data || [])
+    setBlocksLoaded(true)
+  }
 
   useEffect(() => {
     if (user) loadBlocks()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
 
   // /cover-letter/:id 진입 시 기존 작업물 로드
@@ -700,6 +811,7 @@ export default function CoverLetterPage() {
           }
         })
         setInitialAnswers(answersByIndex)
+        setInitialInterviewQuestions(letter.interview_questions || null)
         setPhase('result')
       })
       .catch(err => {
@@ -709,15 +821,6 @@ export default function CoverLetterPage() {
       })
     return () => { cancelled = true }
   }, [routeId, user, navigate, toast])
-
-  const loadBlocks = async () => {
-    const { data } = await supabase
-      .from('experience_blocks')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-    setBlocks(data || [])
-  }
 
   const runMatching = async (jobData, questionList) => {
     if (blocks.length > 0 && questionList.length > 0) {
@@ -755,6 +858,26 @@ export default function CoverLetterPage() {
       toast.error('이력 저장에 실패했지만 작업은 계속할 수 있어요.')
     }
   }
+
+  // 추천 공고에서 진입 → 붙여넣기·AI 파싱 없이 저장된 공고 데이터로 바로 매칭/자소서 진입.
+  const prefillRan = useRef(false)
+  useEffect(() => {
+    if (!prefillPosting || routeId || prefillRan.current || !blocksLoaded || !user) return
+    prefillRan.current = true
+    const jobData = {
+      company: prefillPosting.company || '',
+      position: prefillPosting.position || '',
+      keywords: Array.isArray(prefillPosting.keywords) ? prefillPosting.keywords : [],
+      // 워크넷 목록엔 상세 요건이 없어 키워드로 대체 (자소서 생성 시 참고 신호)
+      requirements: Array.isArray(prefillPosting.keywords) ? prefillPosting.keywords : [],
+    }
+    const rawText = prefillPosting.description || `${jobData.company} ${jobData.position} 채용공고`
+    setJobInfo(jobData)
+    setQuestions(DEFAULT_QUESTIONS)
+    setJobPostingRaw(rawText)
+    enterResultPhase(jobData, DEFAULT_QUESTIONS, rawText)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillPosting, routeId, blocksLoaded, user])
 
   const handleAnalyze = async (rawText) => {
     if (!rawText.trim()) return
@@ -833,6 +956,7 @@ export default function CoverLetterPage() {
       onReset={handleReset}
       coverLetterId={coverLetterId}
       initialAnswers={initialAnswers}
+      initialInterviewQuestions={initialInterviewQuestions}
     />
   )
 }

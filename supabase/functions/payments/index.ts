@@ -172,9 +172,7 @@ Deno.serve(async (req) => {
     )
     if (subErr) return json(500, { error: '구독 기록 실패' })
     return json(200, { ok: true })
-
-    // TODO(갱신): current_period_end 도달분을 PRICES.pro_monthly 로 재청구하는
-    //   스케줄러(pg_cron 또는 Supabase scheduled function) 추가 + 갱신 D-2 알림.
+    // 갱신(current_period_end 도달분 재청구)은 cron-tasks Edge Function 이 담당.
   }
 
   return json(400, { error: 'unknown action' })

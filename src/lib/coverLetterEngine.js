@@ -53,7 +53,7 @@ const GENERATE_ANSWER_PROMPT = `당신은 자소서 작성 전문가입니다.
 1. 블록의 STAR 내용을 그대로 활용하되, 문항에 맞게 재구성
 2. JD의 키워드/요구사항을 자연스럽게 녹여넣기
 3. 구체적 수치, 행동, 결과를 반드시 포함
-4. 글자수 제한을 반드시 지킬 것
+4. 글자수 제한을 절대 초과하지 말 것. 목표는 제한의 90~95% (예: 500자 제한이면 450~490자). 제한 초과는 실패로 간주.
 5. 자연스러운 한국어 문체, 과도한 미사여구 금지
 6. AI가 쓴 티가 나지 않게, 지원자 본인의 목소리로
 
@@ -84,18 +84,18 @@ function extractJson(text) {
   // 1. ```json ... ``` 또는 ``` ... ```
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
   if (fenced) {
-    try { return JSON.parse(fenced[1]) } catch {}
+    try { return JSON.parse(fenced[1]) } catch { /* 다음 방법으로 폴백 */ }
   }
 
   // 2. 첫 { 부터 마지막 } 까지
   const firstBrace = text.indexOf('{')
   const lastBrace = text.lastIndexOf('}')
   if (firstBrace !== -1 && lastBrace > firstBrace) {
-    try { return JSON.parse(text.slice(firstBrace, lastBrace + 1)) } catch {}
+    try { return JSON.parse(text.slice(firstBrace, lastBrace + 1)) } catch { /* 다음 방법으로 폴백 */ }
   }
 
   // 3. 전체를 그대로
-  try { return JSON.parse(text.trim()) } catch {}
+  try { return JSON.parse(text.trim()) } catch { /* 파싱 불가 */ }
 
   return null
 }
@@ -192,7 +192,15 @@ export async function generateAnswer(question, block, jobInfo, options = {}) {
   const tone = options.tone && TONE_DIRECTIVES[options.tone] ? options.tone : 'default'
   const emphasis = options.emphasis && EMPHASIS_DIRECTIVES[options.emphasis] ? options.emphasis : 'balanced'
 
-  const directives = [TONE_DIRECTIVES[tone], EMPHASIS_DIRECTIVES[emphasis]].filter(Boolean).join('\n')
+  const parts = [TONE_DIRECTIVES[tone], EMPHASIS_DIRECTIVES[emphasis]]
+  if (options.condense) {
+    const limit = question.charLimit || 500
+    parts.push(
+      `직전 답변이 글자수 제한(${limit}자)을 초과했습니다. 핵심 메시지와 STAR 구조는 유지하되 ` +
+      `문장을 압축하고 군더더기를 덜어 반드시 ${limit}자 이내로 줄이세요. 목표 ${Math.floor(limit * 0.92)}자 내외.`,
+    )
+  }
+  const directives = parts.filter(Boolean).join('\n')
   const systemPrompt = directives
     ? `${GENERATE_ANSWER_PROMPT}\n\n## 추가 지시\n${directives}`
     : GENERATE_ANSWER_PROMPT
@@ -229,11 +237,66 @@ export async function generateAnswer(question, block, jobInfo, options = {}) {
   })
   const parsed = extractJson(response)
   if (!parsed) throw new Error('자소서 생성 결과를 해석하지 못했습니다.')
+  const answerText = parsed.answer || ''
   return {
-    answer: parsed.answer || '',
-    charCount: parsed.charCount || (parsed.answer?.length ?? 0),
+    answer: answerText,
+    // 글자수는 항상 실제 본문 길이로 계산 (모델의 자기보고 charCount 는 부정확 →
+    // 초과 경고가 안 떠 사용자가 제한 넘긴 자소서를 제출하는 실질 피해가 있었음).
+    charCount: answerText.length,
     usedKeywords: Array.isArray(parsed.usedKeywords) ? parsed.usedKeywords : [],
     generationOptions: { tone, emphasis },
+  }
+}
+
+const INTERVIEW_QUESTIONS_PROMPT = `당신은 채용 면접관이자 면접 코치입니다.
+지원자가 특정 공고에 낸 자소서 답변을 보고, 이 답변을 근거로 실제 면접에서 나올 법한
+예상 질문을 만듭니다. 지원자의 경험을 깊게 파고드는 압박·검증 질문 위주로.
+
+## 원칙
+1. 지원자가 실제로 쓴 답변 내용에 근거한 질문 (일반론 금지).
+2. 회사/직무 맥락(JD 키워드·요구사항)을 반영.
+3. 각 질문에 (a) 면접관의 의도, (b) 지원자가 자기 경험으로 답할 방향 힌트를 함께.
+4. 6~8개. 쉬운 것부터 압박 질문까지 난이도를 섞어서.
+
+반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 금지.
+
+{
+  "items": [
+    { "question": "예상 질문", "intent": "면접관이 이걸 왜 묻는지 (한 줄)", "hint": "본인 경험으로 답하는 방향 (한 줄)" }
+  ]
+}`
+
+export async function generateInterviewQuestions(jobInfo, answers, coverLetterId) {
+  const messages = [
+    { role: 'system', content: INTERVIEW_QUESTIONS_PROMPT },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        company: jobInfo?.company,
+        position: jobInfo?.position,
+        requirements: jobInfo?.requirements,
+        keywords: jobInfo?.keywords,
+        answers: answers.map((a) => ({ question: a.question, answer: a.answer })),
+      }),
+    },
+  ]
+  const response = await sendMessage(messages, {
+    action: 'interview_qgen',
+    maxOutputTokens: 2048,
+    temperature: 0.6,
+    coverLetterId,
+  })
+  const parsed = extractJson(response)
+  const items = Array.isArray(parsed?.items) ? parsed.items : []
+  return {
+    generatedAt: new Date().toISOString(),
+    items: items
+      .filter((it) => it && it.question)
+      .map((it) => ({
+        question: String(it.question),
+        intent: it.intent ? String(it.intent) : '',
+        hint: it.hint ? String(it.hint) : '',
+      })),
   }
 }
 

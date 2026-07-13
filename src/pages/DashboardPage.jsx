@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   MessageCircle, MapPin, Zap, Target, Lightbulb, Sparkles,
   Plus, FileText, Pencil, Trash2, Search, ChevronDown, ChevronRight,
@@ -18,6 +18,7 @@ import { useToast } from '../contexts/ToastContext'
 import { Card } from '../components/ui/Card'
 import { StrengthStars } from '../components/ui/StrengthStars'
 import { recommendIndustries } from '../lib/coverLetterEngine'
+import { fetchActivePostings, recommendPostings, daysUntil } from '../lib/jobPostings'
 
 function isEmptyRec(rec) {
   if (!rec || typeof rec !== 'object') return true
@@ -43,7 +44,6 @@ function InterviewTranscript({ blockId }) {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
     supabase
       .from('interview_sessions')
       .select('messages')
@@ -347,7 +347,7 @@ function BlockFullView({ block, onDelete }) {
             </div>
           )}
 
-          <InterviewTranscript blockId={block.id} />
+          <InterviewTranscript key={block.id} blockId={block.id} />
         </div>
       </div>
     </Card>
@@ -437,6 +437,62 @@ const SORT_OPTIONS = [
   { id: 'strength', label: '강도 높은 순' },
 ]
 
+// 내 블록과 맞는 공고 추천 (DB필터·AI비용0). 클릭 시 자소서 흐름으로 프리필.
+function RecommendedPostings({ blocks }) {
+  const navigate = useNavigate()
+  const [recs, setRecs] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchActivePostings()
+      .then(postings => { if (!cancelled) setRecs(recommendPostings(blocks, postings)) })
+      .catch(err => console.error('Postings load failed:', err))
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [blocks])
+
+  // 공고가 없거나(인제스트 전) 매칭 0이면 조용히 숨김
+  if (loading || recs.length === 0) return null
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-2 mb-1">
+        <Briefcase size={16} className="text-primary-600" />
+        <h3 className="text-sm font-bold text-slate-900">내 블록과 맞는 공고</h3>
+      </div>
+      <p className="text-xs text-slate-400 mb-4">클릭하면 이 공고로 자소서 작성을 바로 시작해요.</p>
+      <div className="grid sm:grid-cols-2 gap-2">
+        {recs.map(({ posting, matched }) => {
+          const d = daysUntil(posting.close_at)
+          return (
+            <button
+              key={posting.id}
+              onClick={() => navigate('/cover-letter/new', { state: { posting } })}
+              className="text-left border border-slate-200 rounded-lg p-3 hover:border-primary-300 hover:shadow-sm transition"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-sm font-medium text-slate-800 line-clamp-1">{posting.title || posting.position}</span>
+                {d !== null && d <= 7 && (
+                  <span className="shrink-0 text-xs font-bold text-red-500">D-{d >= 0 ? d : 0}</span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">
+                {posting.company}{posting.region ? ` · ${posting.region}` : ''}
+              </p>
+              <div className="flex flex-wrap gap-1 mt-2">
+                {matched.map((m, i) => (
+                  <span key={i} className="text-[10px] bg-primary-50 text-primary-600 px-1.5 py-0.5 rounded-full">{m}</span>
+                ))}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
 export default function DashboardPage() {
   const { user } = useAuth()
   const [blocks, setBlocks] = useState([])
@@ -447,11 +503,6 @@ export default function DashboardPage() {
   const [groupFilter, setGroupFilter] = useState('all')
   const [sort, setSort] = useState('recent')
   const toast = useToast()
-
-  useEffect(() => {
-    if (!user) return
-    loadAll()
-  }, [user])
 
   const loadAll = async () => {
     setLoading(true)
@@ -479,6 +530,12 @@ export default function DashboardPage() {
     if (!usageRes.error) setUsage(usageRes.data)
     setLoading(false)
   }
+
+  useEffect(() => {
+    if (!user) return
+    loadAll()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
 
   // 백그라운드: recommended_industries가 비어있는 블록을 순차 재호출
   const retryEmptyRecommendations = (list) => {
@@ -509,10 +566,8 @@ export default function DashboardPage() {
     } else {
       setBlocks(prev => prev.filter(b => b.id !== id))
       if (selectedId === id) {
-        setSelectedId(prev => {
-          const remaining = blocks.filter(b => b.id !== id)
-          return remaining[0]?.id || null
-        })
+        const remaining = blocks.filter(b => b.id !== id)
+        setSelectedId(remaining[0]?.id || null)
       }
       toast.success('블록이 삭제되었습니다.')
     }
@@ -594,6 +649,9 @@ export default function DashboardPage() {
             <div className="lg:col-span-1"><NextCategoryCard blocks={blocks} /></div>
             <div className="lg:col-span-1"><UsageCard usage={usage} /></div>
           </div>
+
+          {/* 내 블록과 맞는 공고 추천 (돌아올 이유 → 자소서 퍼널) */}
+          <RecommendedPostings blocks={blocks} />
 
           {/* Notion 패널 — 좌 리스트 / 우 풀뷰 */}
           <div className="grid lg:grid-cols-3 gap-4">
